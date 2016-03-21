@@ -3,7 +3,7 @@ package com.appliedscala.generator
 import java.io.{FileWriter, OutputStreamWriter, File}
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file._
-import java.util.Locale
+import java.util.jar.JarInputStream
 import akka.actor.ActorSystem
 import com.typesafe.config.impl.{AbstractConfigValue, ConfigString}
 import com.typesafe.config._
@@ -12,17 +12,15 @@ import org.slf4j.LoggerFactory
 
 import freemarker.template.{Template, TemplateExceptionHandler, Version, Configuration}
 import org.pegdown.{Extensions, PegDownProcessor}
-import org.pegdown.plugins.PegDownPlugins
 
 import scala.io.Source
 import scala.collection.JavaConversions._
+import scala.util.Try
 import scalaz.{Validation, \/}
 import scalaz.concurrent.Task
 import scala.concurrent.ExecutionContext.Implicits.global
 import com.beachape.filemanagement.RxMonitor
 import java.nio.file.StandardWatchEventKinds._
-
-case class Content(title: String, body: String, date: String)
 
 case class FileRenderingTask(filename: String, task: Task[Unit])
 
@@ -30,11 +28,24 @@ object SiteGenerator {
 
   val logger = LoggerFactory.getLogger("SiteGenerator")
   val PropertiesSeparator = "~~~~~~"
-  val DefaultConfFile = "conf/application.conf"
+  val DefaultConfFile = "s2gen.conf"
   val SiteMapFilename = "sitemap.xml"
   val IndexFilename = "index.html"
 
   def main(args: Array[String]) = {
+
+    if (args.length > 0 && (args.head == "--version")) {
+      val versionNumberT = Try { FileRenderingTask.getClass.getPackage.getImplementationVersion }
+      val versionNumber = versionNumberT.getOrElse("[dev]")
+      println(s"""s2gen version $versionNumber""")
+      System.exit(0)
+    }
+
+    if (!Files.exists(Paths.get(DefaultConfFile))) {
+      System.err.println(s"Cannot find a configuration file $DefaultConfFile")
+      System.exit(-1)
+    }
+
     implicit val actorSystem = ActorSystem.create("actor-world")
 
     val conf = ConfigFactory.parseFile(new File(DefaultConfFile))
@@ -188,10 +199,12 @@ object SiteGenerator {
     val mdContent = contentLines.mkString("\n")
     val renderedMdContent = mdGenerator.markdownToHtml(mdContent)
 
+    val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
+
     val contentObj = contentPropertyMap ++ Map(
       "body" -> renderedMdContent,
       "sourceDirectoryPath" -> mdFile.getParentFile.getAbsolutePath,
-      "sourceFilename" -> mdFile.getAbsolutePath,
+      "sourceFilename" -> simpleFilename,
       "uri" -> contentPropertyMap("link")
     )
     contentObj
