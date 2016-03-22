@@ -72,7 +72,7 @@ object SiteGenerator {
 
     val pgPluginsCode = Extensions.TABLES | Extensions.FENCED_CODE_BLOCKS
     val mdGenerator = new PegDownProcessor(pgPluginsCode)
-    val htmlSerializer = createHtmlSerializer(siteHost)
+    val linkRenderer = createLinkRenderer(siteHost)
     val cfg = createFreemarkerConfig(templatesDirName)
     val postTemplate = cfg.getTemplate(postTemplateName)
     val archiveTemplate = cfg.getTemplate(archiveTemplateName)
@@ -88,7 +88,7 @@ object SiteGenerator {
 
       logger.info("Generation started")
       val postData = mdContentFiles.map { mdFile =>
-        processMdFile(mdFile, mdGenerator, htmlSerializer)
+        processMdFile(mdFile, mdGenerator, linkRenderer)
       }
 
       generateArchivePage(postData, archiveOutput, archiveTemplate)
@@ -139,14 +139,14 @@ object SiteGenerator {
     these ++ these.filter(_.isDirectory).flatMap(recursiveListFiles)
   }
 
-  private def createHtmlSerializer(siteUrl: String): ToHtmlSerializer = {
-    new ToHtmlSerializer(new LinkRenderer() {
+  private def createLinkRenderer(siteUrl: String): LinkRenderer = {
+    new LinkRenderer() {
       override def render(node: ExpLinkNode, text: String): Rendering = {
         if (!node.url.contains(siteUrl)) {
           super.render(node, text).withAttribute("target", "_blank")
         } else super.render(node, text)
       }
-    })
+    }
   }
 
   private def createFreemarkerConfig(templateDirName: String): Configuration = {
@@ -197,7 +197,7 @@ object SiteGenerator {
     logger.info("The archive page was generated")
   }
 
-  private def processMdFile(mdFile: File, mdGenerator: PegDownProcessor, htmlSerializer: ToHtmlSerializer): Map[String, String] = {
+  private def processMdFile(mdFile: File, mdGenerator: PegDownProcessor, linkRenderer: LinkRenderer): Map[String, String] = {
     val postContent = Source.fromFile(mdFile).getLines().toList
     val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
     val propertiesLines = postContent.take(separatorLineNumber)
@@ -211,9 +211,7 @@ object SiteGenerator {
       }
     }.toMap
     val mdContent = contentLines.mkString("\n")
-
-    val outputNode = mdGenerator.parseMarkdown(mdContent.toCharArray)
-    val renderedMdContent = htmlSerializer.toHtml(outputNode)
+    val renderedMdContent = mdGenerator.markdownToHtml(mdContent, linkRenderer)
     val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
 
     val contentObj = contentPropertyMap ++ Map(
