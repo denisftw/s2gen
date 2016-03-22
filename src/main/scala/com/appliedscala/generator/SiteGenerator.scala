@@ -3,15 +3,18 @@ package com.appliedscala.generator
 import java.io.{FileWriter, OutputStreamWriter, File}
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file._
+import java.util.Collections
 import java.util.jar.JarInputStream
 import akka.actor.ActorSystem
 import com.typesafe.config.impl.{AbstractConfigValue, ConfigString}
 import com.typesafe.config._
 import org.apache.commons.io.FileUtils
+import org.pegdown.LinkRenderer.Rendering
+import org.pegdown.ast.{ExpLinkNode, AutoLinkNode, RefLinkNode}
 import org.slf4j.LoggerFactory
 
 import freemarker.template.{Template, TemplateExceptionHandler, Version, Configuration}
-import org.pegdown.{Extensions, PegDownProcessor}
+import org.pegdown._
 
 import scala.io.Source
 import scala.collection.JavaConversions._
@@ -69,6 +72,7 @@ object SiteGenerator {
 
     val pgPluginsCode = Extensions.TABLES | Extensions.FENCED_CODE_BLOCKS
     val mdGenerator = new PegDownProcessor(pgPluginsCode)
+    val htmlSerializer = createHtmlSerializer(siteHost)
     val cfg = createFreemarkerConfig(templatesDirName)
     val postTemplate = cfg.getTemplate(postTemplateName)
     val archiveTemplate = cfg.getTemplate(archiveTemplateName)
@@ -84,7 +88,7 @@ object SiteGenerator {
 
       logger.info("Generation started")
       val postData = mdContentFiles.map { mdFile =>
-        processMdFile(mdFile, mdGenerator)
+        processMdFile(mdFile, mdGenerator, htmlSerializer)
       }
 
       generateArchivePage(postData, archiveOutput, archiveTemplate)
@@ -135,6 +139,16 @@ object SiteGenerator {
     these ++ these.filter(_.isDirectory).flatMap(recursiveListFiles)
   }
 
+  private def createHtmlSerializer(siteUrl: String): ToHtmlSerializer = {
+    new ToHtmlSerializer(new LinkRenderer() {
+      override def render(node: ExpLinkNode, text: String): Rendering = {
+        if (!node.url.contains(siteUrl)) {
+          super.render(node, text).withAttribute("target", "_blank")
+        } else super.render(node, text)
+      }
+    })
+  }
+
   private def createFreemarkerConfig(templateDirName: String): Configuration = {
     val cfg = new Configuration(Configuration.VERSION_2_3_20)
     cfg.setDirectoryForTemplateLoading(new File(templateDirName))
@@ -183,7 +197,7 @@ object SiteGenerator {
     logger.info("The archive page was generated")
   }
 
-  private def processMdFile(mdFile: File, mdGenerator: PegDownProcessor): Map[String, String] = {
+  private def processMdFile(mdFile: File, mdGenerator: PegDownProcessor, htmlSerializer: ToHtmlSerializer): Map[String, String] = {
     val postContent = Source.fromFile(mdFile).getLines().toList
     val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
     val propertiesLines = postContent.take(separatorLineNumber)
@@ -197,8 +211,9 @@ object SiteGenerator {
       }
     }.toMap
     val mdContent = contentLines.mkString("\n")
-    val renderedMdContent = mdGenerator.markdownToHtml(mdContent)
 
+    val outputNode = mdGenerator.parseMarkdown(mdContent.toCharArray)
+    val renderedMdContent = htmlSerializer.toHtml(outputNode)
     val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
 
     val contentObj = contentPropertyMap ++ Map(
