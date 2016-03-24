@@ -1,7 +1,6 @@
 #!/bin/bash
 
 EXEC_LOC="`dirname "$0"`"
-EXEC_PARENT="`dirname $EXEC_LOC`"
 
 realpath () {
 (
@@ -13,7 +12,7 @@ declare -r real_script_path="$(realpath "$0")"
 
 declare -r app_home="$(realpath "$(dirname "$real_script_path")")"
 
-declare -r lib_dir="$EXEC_PARENT/lib"
+declare -r lib_dir="$EXEC_LOC/../lib"
 
 ${{template_declares}}
 
