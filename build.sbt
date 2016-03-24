@@ -1,6 +1,6 @@
 name := "s2gen"
 
-version := "0.1"
+version := "0.2.0"
 
 scalaVersion := "2.11.8"
 
@@ -13,7 +13,8 @@ libraryDependencies ++= Seq(
   "org.scalaz" %% "scalaz-concurrent" % "7.2.1",
   "com.beachape.filemanagement" %% "schwatcher" % "0.3.1",
   "com.typesafe" % "config" % "1.3.0",
-  "commons-io" % "commons-io" % "2.4"
+  "commons-io" % "commons-io" % "2.4",
+  "commons-cli" % "commons-cli" % "1.3.1"
 )
 
 enablePlugins(JavaAppPackaging)

@@ -1,0 +1,42 @@
+.main-content {
+  margin: auto;
+  max-width: 780px;
+  overflow-y: scroll;
+}
+
+.blog-archive__blog-post__title a {
+  font-size: 1.4em;
+  color: #444;
+}
+
+.site-menu {
+  padding: 20px 0 20px 0;
+  border-bottom: 2px solid #666;
+}
+
+.site-menu ul {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+}
+
+.site-menu ul li {
+  display: inline;
+  margin-right: 18px;
+}
+
+.site-menu a {
+  font-size: 1.4em;
+  color: #666;
+  text-decoration: none;
+}
+
+.site-menu a:hover {
+  font-size: 1.4em;
+  color: #888;
+}
+
+.main-content {
+  font-family: Arial, Helvetica, sans-serif;
+  color: #444;
+}

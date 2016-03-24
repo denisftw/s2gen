@@ -1,19 +1,17 @@
 package com.appliedscala.generator
 
-import java.io.{FileWriter, OutputStreamWriter, File}
+import java.io.{PrintWriter, FileOutputStream, FileWriter, File}
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file._
-import java.util.Collections
-import java.util.jar.JarInputStream
 import akka.actor.ActorSystem
-import com.typesafe.config.impl.{AbstractConfigValue, ConfigString}
 import com.typesafe.config._
-import org.apache.commons.io.FileUtils
+import org.apache.commons.cli.{HelpFormatter, DefaultParser, Options}
+import org.apache.commons.io.{Charsets, IOUtils, FileUtils}
 import org.pegdown.LinkRenderer.Rendering
-import org.pegdown.ast.{ExpLinkNode, AutoLinkNode, RefLinkNode}
+import org.pegdown.ast.ExpLinkNode
 import org.slf4j.LoggerFactory
 
-import freemarker.template.{Template, TemplateExceptionHandler, Version, Configuration}
+import freemarker.template.{Template, TemplateExceptionHandler, Configuration}
 import org.pegdown._
 
 import scala.io.Source
@@ -35,12 +33,30 @@ object SiteGenerator {
   val SiteMapFilename = "sitemap.xml"
   val IndexFilename = "index.html"
 
+  val OptionVersion = "version"
+  val InitOption = "init"
+  val HelpOption = "help"
+
   def main(args: Array[String]) = {
 
-    if (args.length > 0 && (args.head == "--version")) {
+    val options = new Options
+    options.addOption(OptionVersion, false, "print the version information")
+    options.addOption(InitOption, false, "initialize project structure and exit")
+    options.addOption(HelpOption, false, "print this message")
+    val helpFormatter = new HelpFormatter
+    val parser = new DefaultParser
+    val cmd = parser.parse(options, args)
+
+    if (cmd.hasOption(OptionVersion)) {
       val versionNumberT = Try { FileRenderingTask.getClass.getPackage.getImplementationVersion }
       val versionNumber = versionNumberT.getOrElse("[dev]")
       println(s"""s2gen version $versionNumber""")
+      System.exit(0)
+    } else if (cmd.hasOption(InitOption)) {
+      initProjectStructure()
+      System.exit(0)
+    } else if (cmd.hasOption(HelpOption)) {
+      helpFormatter.printHelp("s2gen", options)
       System.exit(0)
     }
 
@@ -60,6 +76,8 @@ object SiteGenerator {
     val archiveTemplateName = conf.getString("templates.archive")
     val sitemapTemplateName = conf.getString("templates.sitemap")
     val indexTemplateName = conf.getString("templates.index")
+    val siteTitle = conf.getString("site.title")
+    val siteDescription = conf.getString("site.description")
     val siteHost = conf.getString("site.host")
     val lastmod = conf.getString("site.lastmod")
 
@@ -86,17 +104,18 @@ object SiteGenerator {
       Files.deleteIfExists(Paths.get(sitemapOutputDir.toString, SiteMapFilename))
       Files.deleteIfExists(Paths.get(indexOutputDir.toString, IndexFilename))
 
+      val siteCommonData = Map("title" -> siteTitle, "description" -> siteDescription)
       logger.info("Generation started")
       val postData = mdContentFiles.map { mdFile =>
         processMdFile(mdFile, mdGenerator, linkRenderer)
       }
 
-      generateArchivePage(postData, archiveOutput, archiveTemplate)
-      generateSitemap(postData, sitemapOutputDir, sitemapTemplate, Map("siteHost" -> siteHost, "lastmod" -> lastmod))
-      generateIndexPage(indexOutputDir, indexTemplate)
+      generateArchivePage(siteCommonData, postData, archiveOutput, archiveTemplate)
+      generateSitemap(siteCommonData, postData, sitemapOutputDir, sitemapTemplate, Map("siteHost" -> siteHost, "lastmod" -> lastmod))
+      generateIndexPage(siteCommonData, indexOutputDir, indexTemplate)
 
       val tasks = postData.map { contentObj =>
-        writeRenderedFile(contentObj, siteDir, postTemplate)
+        generateSingleBlogFile(siteCommonData, contentObj, siteDir, postTemplate)
       }
       runTasks(tasks)
       logger.info("Generation finished")
@@ -125,13 +144,44 @@ object SiteGenerator {
     })
     monitor.registerPath(ENTRY_MODIFY, Paths.get(templatesDirName))
 
-    logger.info(s"Waiting for changes under the content directory: $contentDir")
+    logger.info(s"Waiting for changes...")
     Runtime.getRuntime.addShutdownHook(new Thread() {
       override def run(): Unit = {
         logger.info(s"Stopping the monitor")
         monitor.stop()
       }
     })
+  }
+
+  private def initProjectStructure(): Unit = {
+    println("Initializing...")
+    val classLoader = this.getClass.getClassLoader
+    copyFromClasspath(classLoader, "init/site/styles.css", "site/css", "styles.css")
+    copyFromClasspath(classLoader, "init/s2gen.conf", ".", "s2gen.conf")
+    copyFromClasspath(classLoader, "init/content/hello-world.md", "content/blog/2016", "hello-world.md")
+    val templateNames = Seq("archive.ftl", "blog.ftl", "footer.ftl" , "header.ftl", "index.ftl",
+      "main.ftl", "menu.ftl", "page.ftl", "post.ftl", "sitemap.ftl")
+    templateNames.foreach { templateName =>
+      copyFromClasspath(classLoader, s"init/templates/$templateName", "templates", templateName)
+    }
+    println(s"The skeleton project has been generated. Now you can type s2gen to generate HTML files")
+  }
+
+  private def copyFromClasspath(classLoader: ClassLoader, cpPath: String,
+                      destinationDir: String, destinationFilename: String): Unit = {
+    val source = Source.fromInputStream(classLoader.getResourceAsStream(cpPath), "UTF-8")
+    val destinationPath = Paths.get(destinationDir)
+    if (Files.notExists(destinationPath)) {
+      Files.createDirectories(destinationPath)
+    }
+    val pw = new PrintWriter(new File(destinationDir, destinationFilename))
+    try {
+      source.foreach( char => pw.print(char) )
+    } catch {
+      case e: Exception => logger.error("Exception occurred while initializing the project", e)
+    } finally {
+      pw.close()
+    }
   }
 
   def recursiveListFiles(f: File): Array[File] = {
@@ -157,7 +207,7 @@ object SiteGenerator {
     cfg
   }
 
-  private def generateSitemap(postData: Seq[Map[String, String]], currentOutputDir: Path,
+  private def generateSitemap(siteCommonData: Map[String, String], postData: Seq[Map[String, String]], currentOutputDir: Path,
                               sitemapTemplate: Template, additionalMap: Map[String, String]): Unit = {
     logger.info("Generating the sitemap")
     val publishedPosts = postData.filter { post =>
@@ -165,7 +215,10 @@ object SiteGenerator {
       postStatus.contains("published")
     }
     val posts = seqAsJavaList(publishedPosts.map { post => mapAsJavaMap(post) }.sortWith(_.get("date") > _.get("date")))
-    val inputProps = mapAsJavaMap { additionalMap ++ Map("posts" -> posts ) }
+    val inputProps = mapAsJavaMap { additionalMap ++ Map(
+      "posts" -> posts,
+      "site" -> mapAsJavaMap(siteCommonData)
+    ) }
     if (Files.notExists(currentOutputDir)) {
       Files.createDirectories(currentOutputDir)
     }
@@ -174,21 +227,26 @@ object SiteGenerator {
     logger.info("The sitemap was generated")
   }
 
-  private def generateIndexPage(indexOutputDir: Path, indexTemplate: Template): Unit = {
+  private def generateIndexPage(siteCommonData: Map[String, String], indexOutputDir: Path, indexTemplate: Template): Unit = {
     logger.info("Generating the index page")
     val indexOutputFile = new File(indexOutputDir.toFile, IndexFilename)
-    renderTemplate(indexOutputFile, indexTemplate, mapAsJavaMap(Map.empty[String, String]))
+    renderTemplate(indexOutputFile, indexTemplate, mapAsJavaMap(Map(
+      "site" -> mapAsJavaMap(siteCommonData)
+    )))
     logger.info("The index page was generated")
   }
 
-  private def generateArchivePage(postData: Seq[Map[String, String]], archiveOutput: Path, archiveTemplate: Template): Unit = {
+  private def generateArchivePage(siteCommonData: Map[String, String], postData: Seq[Map[String, String]], archiveOutput: Path, archiveTemplate: Template): Unit = {
     logger.info("Generating the archive page")
     val publishedPosts = postData.filter { post =>
       val postStatus = post.get("status")
       postStatus.contains("published")
     }
     val posts = seqAsJavaList(publishedPosts.map { post => mapAsJavaMap(post) }.sortWith(_.get("date") > _.get("date")))
-    val archiveInput = mapAsJavaMap { Map("posts" -> posts ) }
+    val archiveInput = mapAsJavaMap { Map(
+      "posts" -> posts,
+      "site" -> mapAsJavaMap(siteCommonData)
+    ) }
     if (Files.notExists(archiveOutput)) {
       Files.createDirectories(archiveOutput)
     }
@@ -197,7 +255,8 @@ object SiteGenerator {
     logger.info("The archive page was generated")
   }
 
-  private def processMdFile(mdFile: File, mdGenerator: PegDownProcessor, linkRenderer: LinkRenderer): Map[String, String] = {
+  private def processMdFile(mdFile: File,
+        mdGenerator: PegDownProcessor, linkRenderer: LinkRenderer): Map[String, String] = {
     val postContent = Source.fromFile(mdFile).getLines().toList
     val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
     val propertiesLines = postContent.take(separatorLineNumber)
@@ -223,7 +282,7 @@ object SiteGenerator {
     contentObj
   }
 
-  private def writeRenderedFile(contentObj: Map[String, String],
+  private def generateSingleBlogFile(siteCommonData: Map[String, String], contentObj: Map[String, String],
                                 globalOutputDir: String, template: Template): FileRenderingTask = {
     val sourceFilename = contentObj("sourceFilename")
     val task = Task {
@@ -245,7 +304,10 @@ object SiteGenerator {
         Files.createDirectories(outputDir)
       }
 
-      val input = mapAsJavaMap { Map("content" -> mapAsJavaMap(contentObj) ) }
+      val input = mapAsJavaMap { Map(
+        "content" -> mapAsJavaMap(contentObj),
+        "site" -> mapAsJavaMap(siteCommonData)
+      ) }
       val outputFile = new File(outputDir.toFile, outputFilename)
       renderTemplate(outputFile, template, input)
     }
