@@ -13,6 +13,8 @@
         <title>Blog - ${site.title}</title>
       <#elseif pageType == "post" && content.title??>
         <title>${content.title} - ${site.title}</title>
+      <#elseif pageType == "custom" && pageTitle??>
+          <title>${pageTitle} - ${site.title}</title>
       <#else>
         <title>${site.title}</title>
       </#if>

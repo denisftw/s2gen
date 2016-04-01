@@ -22,8 +22,10 @@ import scalaz.concurrent.Task
 import scala.concurrent.ExecutionContext.Implicits.global
 import com.beachape.filemanagement.RxMonitor
 import java.nio.file.StandardWatchEventKinds._
+import scala.collection.JavaConversions._
 
 case class FileRenderingTask(filename: String, task: Task[Unit])
+case class CustomTemplateGeneration(name: String, template: Template)
 
 object SiteGenerator {
 
@@ -76,6 +78,7 @@ object SiteGenerator {
     val archiveTemplateName = conf.getString("templates.archive")
     val sitemapTemplateName = conf.getString("templates.sitemap")
     val indexTemplateName = conf.getString("templates.index")
+    val customTemplateNames = conf.getStringList("templates.custom").toList
     val siteTitle = conf.getString("site.title")
     val siteDescription = conf.getString("site.description")
     val siteHost = conf.getString("site.host")
@@ -96,6 +99,7 @@ object SiteGenerator {
     val archiveTemplate = cfg.getTemplate(archiveTemplateName)
     val sitemapTemplate = cfg.getTemplate(sitemapTemplateName)
     val indexTemplate = cfg.getTemplate(indexTemplateName)
+    val customTemplates = customTemplateNames.map { name => CustomTemplateGeneration(name.replaceAll("\\.ftl$", ""), cfg.getTemplate(name)) }
     val mdContentFiles = recursiveListFiles(contentDirFile).filterNot(_.isDirectory)
 
     def regenerate(): Unit = {
@@ -113,6 +117,7 @@ object SiteGenerator {
       generateArchivePage(siteCommonData, postData, archiveOutput, archiveTemplate)
       generateSitemap(siteCommonData, postData, sitemapOutputDir, sitemapTemplate, Map("siteHost" -> siteHost, "lastmod" -> lastmod))
       generateIndexPage(siteCommonData, indexOutputDir, indexTemplate)
+      generateCustomPages(siteCommonData, indexOutputDir, customTemplates)
 
       val tasks = postData.map { contentObj =>
         generateSingleBlogFile(siteCommonData, contentObj, siteDir, postTemplate)
@@ -160,7 +165,7 @@ object SiteGenerator {
     copyFromClasspath(classLoader, "init/s2gen.conf", ".", "s2gen.conf")
     copyFromClasspath(classLoader, "init/content/hello-world.md", "content/blog/2016", "hello-world.md")
     val templateNames = Seq("archive.ftl", "blog.ftl", "footer.ftl" , "header.ftl", "index.ftl",
-      "main.ftl", "menu.ftl", "page.ftl", "post.ftl", "sitemap.ftl")
+      "main.ftl", "menu.ftl", "page.ftl", "post.ftl", "sitemap.ftl", "about.ftl", "info.ftl")
     templateNames.foreach { templateName =>
       copyFromClasspath(classLoader, s"init/templates/$templateName", "templates", templateName)
     }
@@ -234,6 +239,21 @@ object SiteGenerator {
       "site" -> mapAsJavaMap(siteCommonData)
     )))
     logger.info("The index page was generated")
+  }
+
+  private def generateCustomPages(siteCommonData: Map[String, String], indexOutputDir: Path, customTemplateGens: List[CustomTemplateGeneration]): Unit = {
+    logger.info("Generating custom pages")
+    customTemplateGens.foreach { gen =>
+      val dirName = Paths.get(indexOutputDir.toString, gen.name)
+      if (Files.notExists(dirName)) {
+        Files.createDirectories(dirName)
+      }
+      val indexOutputFile = new File(dirName.toString, IndexFilename)
+      renderTemplate(indexOutputFile, gen.template, mapAsJavaMap(Map(
+        "site" -> mapAsJavaMap(siteCommonData)
+      )))
+    }
+    logger.info("All custom pages were generated")
   }
 
   private def generateArchivePage(siteCommonData: Map[String, String], postData: Seq[Map[String, String]], archiveOutput: Path, archiveTemplate: Template): Unit = {
