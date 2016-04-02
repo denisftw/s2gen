@@ -4,6 +4,8 @@ version := "0.2.2"
 
 scalaVersion := "2.11.8"
 
+scalacOptions += "-target:jvm-1.6"
+
 libraryDependencies ++= Seq(
   "org.pegdown" % "pegdown" % "1.6.0",
   "org.freemarker" % "freemarker" % "2.3.21",
