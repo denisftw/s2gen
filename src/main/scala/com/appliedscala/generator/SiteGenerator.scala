@@ -275,6 +275,20 @@ object SiteGenerator {
     logger.info("The archive page was generated")
   }
 
+  val PreviewSplitter = """\[\/\/\]\: \# \"__PREVIEW__\""""
+
+  private def extractPreview(contentMd: String): Option[String] = {
+    val contentLength = contentMd.length
+    val previewParts = contentMd.split(PreviewSplitter)
+    if (previewParts.length > 1 && previewParts(1).trim.length > 0) {
+      Some(previewParts(1))
+    } else if (previewParts.nonEmpty && previewParts(0).trim.length > 0 && previewParts(0).length < contentLength) {
+      Some(previewParts(0))
+    } else {
+      None
+    }
+  }
+
   private def processMdFile(mdFile: File,
         mdGenerator: PegDownProcessor, linkRenderer: LinkRenderer): Map[String, String] = {
     val postContent = Source.fromFile(mdFile).getLines().toList
@@ -290,16 +304,23 @@ object SiteGenerator {
       }
     }.toMap
     val mdContent = contentLines.mkString("\n")
+    val mdPreview = extractPreview(mdContent)
     val renderedMdContent = mdGenerator.markdownToHtml(mdContent, linkRenderer)
+    val htmlPreview = mdPreview.map { preview => mdGenerator.markdownToHtml(preview, linkRenderer) }
     val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
 
-    val contentObj = contentPropertyMap ++ Map(
+    val mapBuilder = Map.newBuilder[String, String]
+    mapBuilder ++= contentPropertyMap
+    mapBuilder ++= Map(
       "body" -> renderedMdContent,
       "sourceDirectoryPath" -> mdFile.getParentFile.getAbsolutePath,
       "sourceFilename" -> simpleFilename,
       "uri" -> contentPropertyMap("link")
     )
-    contentObj
+    htmlPreview.foreach { preview =>
+      mapBuilder += "preview" -> preview
+    }
+    mapBuilder.result()
   }
 
   private def generateSingleBlogFile(siteCommonData: Map[String, String], contentObj: Map[String, String],
