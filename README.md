@@ -51,26 +51,22 @@ $ tree -L 4
 
 ```
 
-The example configuration can be found in `s2gen.conf` (HOCON format).
+The example configuration can be found in `s2gen.json`.
 The default settings are mostly fine, but feel free to change the `site.host`.
 In order to generate the site, simply type:
 
 ```
 $ s2gen
-[11:05:53.508] [INFO ] SiteGenerator - Cleaning previous version of the site
-[11:05:53.515] [INFO ] SiteGenerator - Generation started
-[11:05:53.599] [INFO ] SiteGenerator - Generating the archive page
-[11:05:53.662] [INFO ] SiteGenerator - The archive page was generated
-[11:05:53.663] [INFO ] SiteGenerator - Generating the sitemap
-[11:05:53.664] [INFO ] SiteGenerator - The sitemap was generated
-[11:05:53.664] [INFO ] SiteGenerator - Generating the index page
-[11:05:53.665] [INFO ] SiteGenerator - The index page was generated
-[11:05:53.665] [INFO ] SiteGenerator - Generating custom pages
-[11:05:53.667] [INFO ] SiteGenerator - All custom pages were generated
-[11:05:53.706] [INFO ] SiteGenerator - Successfully generated: 2016/hello-world.md
-[11:05:53.706] [INFO ] SiteGenerator - Generation finished
-[11:05:53.706] [INFO ] SiteGenerator - Registering a file watcher
-[11:05:53.745] [INFO ] SiteGenerator - Waiting for changes...
+[22:43:29.760] [INFO ] SiteGenerator - Cleaning previous version of the site
+[22:43:29.765] [INFO ] SiteGenerator - Generation started
+[22:43:29.977] [INFO ] SiteGenerator - Successfully generated: <archive>
+[22:43:29.979] [INFO ] SiteGenerator - Successfully generated: <sitemap>
+[22:43:29.980] [INFO ] SiteGenerator - Successfully generated: <index>
+[22:43:29.981] [INFO ] SiteGenerator - Successfully generated: <about>
+[22:43:29.983] [INFO ] SiteGenerator - Registering a file watcher
+[22:43:29.985] [INFO ] SiteGenerator - Successfully generated: content/hello-world.md
+[22:43:29.986] [INFO ] SiteGenerator - Generation finished
+[22:43:30.018] [INFO ] SiteGenerator - Waiting for changes...
 ```
 
 After generating, **s2gen** switches to the monitor mode and starts waiting for file changes.
@@ -83,9 +79,11 @@ to this directory manually and **s2gen** will not touch them.
 The bootstrap example generates the About page as a custom template. In order to add a custom template,
 you must place the Freemarker file in the `templates` directory and add it to the `templates.custom` list in `s2gen.conf`:
 
-```
-templates {
-  custom = ["about.ftl"]
+```json
+{
+  "templates": {
+    "custom": ["about.ftl"]
+  }
 }
 ```
 
