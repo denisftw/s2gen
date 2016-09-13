@@ -1,31 +1,43 @@
 package com.appliedscala.generator
 
-import java.io.{PrintWriter, FileOutputStream, FileWriter, File}
+import java.io.{File, FileOutputStream, FileWriter, PrintWriter}
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file._
+
 import akka.actor.ActorSystem
-import com.typesafe.config._
-import org.apache.commons.cli.{HelpFormatter, DefaultParser, Options}
-import org.apache.commons.io.{Charsets, IOUtils, FileUtils}
+import org.apache.commons.cli.{DefaultParser, HelpFormatter, Options}
+import org.apache.commons.io.{Charsets, FileUtils, IOUtils}
 import org.pegdown.LinkRenderer.Rendering
 import org.pegdown.ast.ExpLinkNode
 import org.slf4j.LoggerFactory
-
-import freemarker.template.{Template, TemplateExceptionHandler, Configuration}
+import freemarker.template.{Configuration, Template, TemplateExceptionHandler}
 import org.pegdown._
 
 import scala.io.Source
 import scala.collection.JavaConversions._
-import scala.util.Try
-import scalaz.{Validation, \/}
-import scalaz.concurrent.Task
+import scala.util.{Failure, Success, Try}
+import monix.eval.Task
+
 import scala.concurrent.ExecutionContext.Implicits.global
 import com.beachape.filemanagement.RxMonitor
 import java.nio.file.StandardWatchEventKinds._
+
 import scala.collection.JavaConversions._
 
-case class FileRenderingTask(filename: String, task: Task[Unit])
+case class FileRenderingExecution(filename: String, task: Task[Unit])
 case class CustomTemplateGeneration(name: String, template: Template)
+
+case class Directories(basedir: String, content: String, output: String, archive: String, templates: String)
+case class Templates(post: String, archive: String, sitemap: String, index: String, custom: Seq[String])
+case class Site(title: String, description: String, host: String, lastmod: String)
+case class S2GenConf(directories: Directories, templates: Templates, site: Site)
+
+case class MarkdownProcessor(pegDownProcessor: PegDownProcessor, linkRenderer: LinkRenderer)
+case class HtmlTemplates(postTemplate: Template, archiveTemplate: Template,
+                         sitemapTemplate: Template, indexTemplate: Template,
+                         customTemplates: Seq[CustomTemplateGeneration])
+case class OutputPaths(archiveOutput: Path, sitemapOutputDir: Path, indexOutputDir: Path,
+                       siteDir: Path)
 
 object SiteGenerator {
 
@@ -41,86 +53,38 @@ object SiteGenerator {
 
   def main(args: Array[String]) = {
 
-    val options = new Options
-    options.addOption(OptionVersion, false, "print the version information")
-    options.addOption(InitOption, false, "initialize project structure and exit")
-    options.addOption(HelpOption, false, "print this message")
-    val helpFormatter = new HelpFormatter
-    val parser = new DefaultParser
-    val cmd = parser.parse(options, args)
-
-    if (cmd.hasOption(OptionVersion)) {
-      val versionNumberT = Try { FileRenderingTask.getClass.getPackage.getImplementationVersion }
-      val versionNumber = versionNumberT.getOrElse("[dev]")
-      println(s"""s2gen version $versionNumber""")
-      System.exit(0)
-    } else if (cmd.hasOption(InitOption)) {
-      initProjectStructure()
-      System.exit(0)
-    } else if (cmd.hasOption(HelpOption)) {
-      helpFormatter.printHelp("s2gen", options)
-      System.exit(0)
-    }
-
-    if (!Files.exists(Paths.get(DefaultConfFile))) {
-      System.err.println(s"Cannot find a configuration file $DefaultConfFile")
-      System.exit(-1)
-    }
+    parseCommandLineArgs(args)
+    val s2conf = parseConfigOrExit(DefaultConfFile)
 
     implicit val actorSystem = ActorSystem.create("actor-world")
 
-    val conf = ConfigFactory.parseFile(new File(DefaultConfFile))
-    val baseDir = conf.getString("directories.basedir")
-    val contentDir = conf.getString("directories.content")
-    val relativeSiteDir = conf.getString("directories.output")
-    val relativeTemplatesDirName = conf.getString("directories.templates")
-    val postTemplateName = conf.getString("templates.post")
-    val archiveTemplateName = conf.getString("templates.archive")
-    val sitemapTemplateName = conf.getString("templates.sitemap")
-    val indexTemplateName = conf.getString("templates.index")
-    val customTemplateNames = conf.getStringList("templates.custom").toList
-    val siteTitle = conf.getString("site.title")
-    val siteDescription = conf.getString("site.description")
-    val siteHost = conf.getString("site.host")
-    val lastmod = conf.getString("site.lastmod")
+    val contentDirFile = Paths.get(s2conf.directories.basedir, s2conf.directories.content)
+    val mdProcessor = createMarkdownProcessor(s2conf.site.host)
+    val templatesDirName = Paths.get(s2conf.directories.basedir, s2conf.directories.templates).toString
+    val htmlTemplates = createHtmlTemplates(templatesDirName, s2conf)
+    val outputPaths = getOutputPaths(s2conf)
 
-    val siteDir = Paths.get(baseDir, relativeSiteDir).toString
-    val templatesDirName = Paths.get(baseDir, relativeTemplatesDirName).toString
-    val archiveOutput = Paths.get(siteDir, conf.getString("directories.archive"))
-    val sitemapOutputDir = Paths.get(siteDir)
-    val indexOutputDir = Paths.get(siteDir)
-    val contentDirFile = Paths.get(baseDir, contentDir).toFile
-
-    val pgPluginsCode = Extensions.TABLES | Extensions.FENCED_CODE_BLOCKS
-    val mdGenerator = new PegDownProcessor(pgPluginsCode)
-    val linkRenderer = createLinkRenderer(siteHost)
-    val cfg = createFreemarkerConfig(templatesDirName)
-    val postTemplate = cfg.getTemplate(postTemplateName)
-    val archiveTemplate = cfg.getTemplate(archiveTemplateName)
-    val sitemapTemplate = cfg.getTemplate(sitemapTemplateName)
-    val indexTemplate = cfg.getTemplate(indexTemplateName)
-    val customTemplates = customTemplateNames.map { name => CustomTemplateGeneration(name.replaceAll("\\.ftl$", ""), cfg.getTemplate(name)) }
-    val mdContentFiles = recursiveListFiles(contentDirFile).filterNot(_.isDirectory)
+    val mdContentFiles = recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory)
 
     def regenerate(): Unit = {
       logger.info("Cleaning previous version of the site")
-      FileUtils.deleteDirectory(archiveOutput.toFile)
-      Files.deleteIfExists(Paths.get(sitemapOutputDir.toString, SiteMapFilename))
-      Files.deleteIfExists(Paths.get(indexOutputDir.toString, IndexFilename))
+      FileUtils.deleteDirectory(outputPaths.archiveOutput.toFile)
+      Files.deleteIfExists(Paths.get(outputPaths.sitemapOutputDir.toString, SiteMapFilename))
+      Files.deleteIfExists(Paths.get(outputPaths.indexOutputDir.toString, IndexFilename))
 
-      val siteCommonData = Map("title" -> siteTitle, "description" -> siteDescription)
+      val siteCommonData = Map("title" -> s2conf.site.title, "description" -> s2conf.site.description)
       logger.info("Generation started")
       val postData = mdContentFiles.map { mdFile =>
-        processMdFile(mdFile, mdGenerator, linkRenderer)
+        processMdFile(mdFile, mdProcessor)
       }
 
-      generateArchivePage(siteCommonData, postData, archiveOutput, archiveTemplate)
-      generateSitemap(siteCommonData, postData, sitemapOutputDir, sitemapTemplate, Map("siteHost" -> siteHost, "lastmod" -> lastmod))
-      generateIndexPage(siteCommonData, indexOutputDir, indexTemplate)
-      generateCustomPages(siteCommonData, indexOutputDir, customTemplates)
+      generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput, htmlTemplates.archiveTemplate)
+      generateSitemap(siteCommonData, postData, outputPaths.sitemapOutputDir, htmlTemplates.sitemapTemplate, Map("siteHost" -> s2conf.site.host, "lastmod" -> s2conf.site.lastmod))
+      generateIndexPage(siteCommonData, outputPaths.indexOutputDir, htmlTemplates.indexTemplate)
+      generateCustomPages(siteCommonData, outputPaths.indexOutputDir, htmlTemplates.customTemplates)
 
       val tasks = postData.map { contentObj =>
-        generateSingleBlogFile(siteCommonData, contentObj, siteDir, postTemplate)
+        generateSingleBlogFile(siteCommonData, contentObj, outputPaths.siteDir.toString, htmlTemplates.postTemplate)
       }
       runTasks(tasks)
       logger.info("Generation finished")
@@ -141,7 +105,7 @@ object SiteGenerator {
       onCompleted = { () => logger.info("Monitor has been shut down") }
     )
 
-    Files.walkFileTree(contentDirFile.toPath, new SimpleFileVisitor[Path]() {
+    Files.walkFileTree(contentDirFile, new SimpleFileVisitor[Path]() {
       override def preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult = {
           monitor.registerPath(ENTRY_MODIFY, dir)
           FileVisitResult.CONTINUE
@@ -241,7 +205,7 @@ object SiteGenerator {
     logger.info("The index page was generated")
   }
 
-  private def generateCustomPages(siteCommonData: Map[String, String], indexOutputDir: Path, customTemplateGens: List[CustomTemplateGeneration]): Unit = {
+  private def generateCustomPages(siteCommonData: Map[String, String], indexOutputDir: Path, customTemplateGens: Seq[CustomTemplateGeneration]): Unit = {
     logger.info("Generating custom pages")
     customTemplateGens.foreach { gen =>
       val dirName = Paths.get(indexOutputDir.toString, gen.name)
@@ -290,7 +254,7 @@ object SiteGenerator {
   }
 
   private def processMdFile(mdFile: File,
-        mdGenerator: PegDownProcessor, linkRenderer: LinkRenderer): Map[String, String] = {
+                            mdProcessor: MarkdownProcessor): Map[String, String] = {
     val postContent = Source.fromFile(mdFile).getLines().toList
     val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
     val propertiesLines = postContent.take(separatorLineNumber)
@@ -305,8 +269,8 @@ object SiteGenerator {
     }.toMap
     val mdContent = contentLines.mkString("\n")
     val mdPreview = extractPreview(mdContent)
-    val renderedMdContent = mdGenerator.markdownToHtml(mdContent, linkRenderer)
-    val htmlPreview = mdPreview.map { preview => mdGenerator.markdownToHtml(preview, linkRenderer) }
+    val renderedMdContent = mdProcessor.pegDownProcessor.markdownToHtml(mdContent, mdProcessor.linkRenderer)
+    val htmlPreview = mdPreview.map { preview => mdProcessor.pegDownProcessor.markdownToHtml(preview, mdProcessor.linkRenderer) }
     val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
 
     val mapBuilder = Map.newBuilder[String, String]
@@ -324,7 +288,7 @@ object SiteGenerator {
   }
 
   private def generateSingleBlogFile(siteCommonData: Map[String, String], contentObj: Map[String, String],
-                                globalOutputDir: String, template: Template): FileRenderingTask = {
+                                globalOutputDir: String, template: Template): FileRenderingExecution = {
     val sourceFilename = contentObj("sourceFilename")
     val task = Task {
       val outputLink = contentObj.getOrElse("link", throw new Exception(
@@ -352,7 +316,7 @@ object SiteGenerator {
       val outputFile = new File(outputDir.toFile, outputFilename)
       renderTemplate(outputFile, template, input)
     }
-    FileRenderingTask(sourceFilename, task)
+    FileRenderingExecution(sourceFilename, task)
   }
 
   private def renderTemplate(outputFile: File, template: Template, input: java.util.Map[String, _]): Unit = {
@@ -364,14 +328,90 @@ object SiteGenerator {
     }
   }
 
-  private def runTasks(tasks: Seq[FileRenderingTask]): Unit = {
+  private def runTasks(tasks: Seq[FileRenderingExecution]): Unit = {
+    import monix.execution.Scheduler.Implicits.global
+
     val results = tasks.foreach { work =>
       val filename = work.filename
-      val result = work.task.unsafePerformSyncAttempt
-      result.fold(
-        th => logger.error(s"Exception occurred while generating the following: $filename", th),
-        res => logger.info(s"Successfully generated: $filename")
-      )
+      val resultCF = work.task.runAsync { resultT =>
+        resultT match {
+          case Success(s) => logger.info(s"Successfully generated: $filename")
+          case Failure(th) => logger.error(s"Exception occurred while generating the following: $filename", th)
+        }
+      }
+    }
+  }
+
+  private def getOutputPaths(s2conf: S2GenConf): OutputPaths = {
+    val siteDirPath = Paths.get(s2conf.directories.basedir, s2conf.directories.output)
+    val siteDir = siteDirPath.toString
+    val archiveOutput = Paths.get(siteDir, s2conf.directories.archive)
+    val sitemapOutputDir = Paths.get(siteDir)
+    val indexOutputDir = Paths.get(siteDir)
+    OutputPaths(archiveOutput, sitemapOutputDir, indexOutputDir, siteDirPath)
+  }
+
+  private def createHtmlTemplates(templatesDirName: String, s2conf: S2GenConf): HtmlTemplates = {
+    val cfg = createFreemarkerConfig(templatesDirName)
+    val postTemplate = cfg.getTemplate(s2conf.templates.post)
+    val archiveTemplate = cfg.getTemplate(s2conf.templates.archive)
+    val sitemapTemplate = cfg.getTemplate(s2conf.templates.sitemap)
+    val indexTemplate = cfg.getTemplate(s2conf.templates.index)
+    val customTemplates = s2conf.templates.custom.map { name =>
+      CustomTemplateGeneration(name.replaceAll("\\.ftl$", ""), cfg.getTemplate(name))
+    }
+    HtmlTemplates(postTemplate, archiveTemplate, sitemapTemplate, indexTemplate, customTemplates)
+  }
+
+  private def createMarkdownProcessor(host: String): MarkdownProcessor = {
+    val pgPluginsCode = Extensions.TABLES | Extensions.FENCED_CODE_BLOCKS
+    val mdGenerator = new PegDownProcessor(pgPluginsCode)
+    val linkRenderer = createLinkRenderer(host)
+    MarkdownProcessor(mdGenerator, linkRenderer)
+  }
+
+  private def parseConfigOrExit(confFileName: String): S2GenConf = {
+
+    if (!Files.exists(Paths.get(DefaultConfFile))) {
+      System.err.println(s"Cannot find a configuration file $DefaultConfFile")
+      System.exit(-1)
+    }
+
+    import io.circe.jawn._
+    import io.circe.generic.auto._
+    import scala.io.Source
+
+    val confStr = Source.fromFile(DefaultConfFile).getLines().mkString("")
+    val s2confE = decode[S2GenConf](confStr)
+
+    s2confE.recover { case error =>
+      logger.error("Error occurred while parsing the configuration file: ", error)
+      System.exit(-1)
+    }
+
+    s2confE.toOption.get
+  }
+
+  private def parseCommandLineArgs(args: Array[String]): Unit = {
+    val options = new Options
+    options.addOption(OptionVersion, false, "print the version information")
+    options.addOption(InitOption, false, "initialize project structure and exit")
+    options.addOption(HelpOption, false, "print this message")
+    val helpFormatter = new HelpFormatter
+    val parser = new DefaultParser
+    val cmd = parser.parse(options, args)
+
+    if (cmd.hasOption(OptionVersion)) {
+      val versionNumberT = Try { FileRenderingExecution.getClass.getPackage.getImplementationVersion }
+      val versionNumber = versionNumberT.getOrElse("[dev]")
+      println(s"""s2gen version $versionNumber""")
+      System.exit(0)
+    } else if (cmd.hasOption(InitOption)) {
+      initProjectStructure()
+      System.exit(0)
+    } else if (cmd.hasOption(HelpOption)) {
+      helpFormatter.printHelp("s2gen", options)
+      System.exit(0)
     }
   }
 }
