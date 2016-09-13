@@ -14,13 +14,20 @@ import freemarker.template.{Configuration, Template, TemplateExceptionHandler}
 import org.pegdown._
 
 import scala.io.Source
-import scala.util.{Failure, Success, Try}
+import scala.util.Try
 import monix.eval.Task
-
 import com.beachape.filemanagement.RxMonitor
 import java.nio.file.StandardWatchEventKinds._
 
+import monix.execution.CancelableFuture
+
 import scala.collection.JavaConversions._
+
+object GenerationMode extends Enumeration {
+  type GenerationMode = Value
+  val Once = Value("Once")
+  val Monitor = Value("Monitor")
+}
 
 case class FileRenderingJob(filename: String, task: Task[Unit])
 case class CustomTemplateGeneration(name: String, template: Template)
@@ -39,6 +46,8 @@ case class OutputPaths(archiveOutput: Path, sitemapOutputDir: Path, indexOutputD
 
 object SiteGenerator {
 
+  import GenerationMode._
+
   val logger = LoggerFactory.getLogger("SiteGenerator")
   val PropertiesSeparator = "~~~~~~"
   val DefaultConfFile = "s2gen.json"
@@ -48,13 +57,12 @@ object SiteGenerator {
   val OptionVersion = "version"
   val InitOption = "init"
   val HelpOption = "help"
+  val OnceOption = "once"
 
   def main(args: Array[String]) = {
 
-    parseCommandLineArgs(args)
+    val generationMode = parseCommandLineArgs(args)
     val s2conf = parseConfigOrExit(DefaultConfFile)
-
-    implicit val actorSystem = ActorSystem.create("actor-world")
 
     val contentDirFile = Paths.get(s2conf.directories.basedir, s2conf.directories.content)
     val mdProcessor = createMarkdownProcessor(s2conf.site.host)
@@ -62,7 +70,7 @@ object SiteGenerator {
     val outputPaths = getOutputPaths(s2conf)
     val mdContentFiles = recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory)
 
-    def regenerate(): Unit = {
+    def regenerate(): CancelableFuture[Seq[Unit]] = {
       // Making Freemarker re-read templates on every change
       val htmlTemplates = createHtmlTemplates(templatesDirName, s2conf)
 
@@ -87,36 +95,58 @@ object SiteGenerator {
       runTasks(Seq(archiveJob, sitemapJob, indexJob) ++ customPageJobs ++ postJobs)
     }
 
-    regenerate()
+    val cf = regenerate()
+    logFutureResult(cf)
 
-    logger.info("Registering a file watcher")
+    if (generationMode == GenerationMode.Monitor) {
+      implicit val actorSystem = ActorSystem.create("actor-world")
 
-    val monitor = RxMonitor()
-    val observable = monitor.observable
-    val subscription = observable.subscribe(
-      onNext = { pathEvent =>
-        logger.info(s"A markdown file has been changed, regenerating the HTML")
-        regenerate()
-      },
-      onError = { exc => logger.error("Exception occurred", exc) },
-      onCompleted = { () => logger.info("Monitor has been shut down") }
-    )
+      logger.info("Registering a file watcher")
 
-    Files.walkFileTree(contentDirFile, new SimpleFileVisitor[Path]() {
-      override def preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult = {
+      val monitor = RxMonitor()
+      val observable = monitor.observable
+      val subscription = observable.subscribe(
+        onNext = { pathEvent =>
+          logger.info(s"A markdown file has been changed, regenerating the HTML")
+          logFutureResult(regenerate())
+        },
+        onError = { exc => logger.error("Exception occurred", exc) },
+        onCompleted = { () => logger.info("Monitor has been shut down") }
+      )
+
+      Files.walkFileTree(contentDirFile, new SimpleFileVisitor[Path]() {
+        override def preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult = {
           monitor.registerPath(ENTRY_MODIFY, dir)
           FileVisitResult.CONTINUE
         }
-    })
-    monitor.registerPath(ENTRY_MODIFY, Paths.get(templatesDirName))
+      })
+      monitor.registerPath(ENTRY_MODIFY, Paths.get(templatesDirName))
 
-    logger.info(s"Waiting for changes...")
-    Runtime.getRuntime.addShutdownHook(new Thread() {
-      override def run(): Unit = {
-        logger.info(s"Stopping the monitor")
-        monitor.stop()
-      }
-    })
+      logger.info(s"Waiting for changes...")
+      Runtime.getRuntime.addShutdownHook(new Thread() {
+        override def run(): Unit = {
+          logger.info(s"Stopping the monitor")
+          monitor.stop()
+        }
+      })
+    } else {
+      // Waiting only in the "once" mode. In the "monitor" mode, actor system will prevent us from exiting
+      import scala.concurrent.Await
+      import scala.concurrent.duration._
+
+      Await.result(cf, 5.seconds)
+    }
+  }
+
+  private def logFutureResult(cf: CancelableFuture[Seq[Unit]]): Unit = {
+    import scala.concurrent.ExecutionContext.Implicits.global
+
+    cf.onSuccess { case _ =>
+      logger.info("Generation finished")
+    }
+    cf.onFailure { case th =>
+      logger.error(s"Exception occurred while running tasks", th)
+    }
   }
 
   private def initProjectStructure(): Unit = {
@@ -337,16 +367,11 @@ object SiteGenerator {
     }
   }
 
-  private def runTasks(tasks: Seq[FileRenderingJob]): Unit = {
+  private def runTasks(tasks: Seq[FileRenderingJob]): CancelableFuture[Seq[Unit]] = {
     import monix.execution.Scheduler.Implicits.global
 
     val resultT = Task.sequence(tasks.map(_.task))
-    resultT.runAsync { tryResult =>
-      tryResult match {
-        case Success(s) => logger.info("Generation finished")
-        case Failure(th) => logger.error(s"Exception occurred while running tasks", th)
-      }
-    }
+    resultT.runAsync
   }
 
   private def getOutputPaths(s2conf: S2GenConf): OutputPaths = {
@@ -399,10 +424,11 @@ object SiteGenerator {
     s2confE.toOption.get
   }
 
-  private def parseCommandLineArgs(args: Array[String]): Unit = {
+  private def parseCommandLineArgs(args: Array[String]): GenerationMode = {
     val options = new Options
     options.addOption(OptionVersion, false, "print the version information")
     options.addOption(InitOption, false, "initialize project structure and exit")
+    options.addOption(OnceOption, false, "generates the site once and exits without starting the monitoring")
     options.addOption(HelpOption, false, "print this message")
     val helpFormatter = new HelpFormatter
     val parser = new DefaultParser
@@ -420,5 +446,7 @@ object SiteGenerator {
       helpFormatter.printHelp("s2gen", options)
       System.exit(0)
     }
+
+    if (cmd.hasOption(OnceOption)) GenerationMode.Once else GenerationMode.Monitor
   }
 }
