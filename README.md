@@ -1,6 +1,6 @@
 # s2gen - static site generator
 
-This is a simple static site generator written in Scala for my web-site [appliedscala.com](http://appliedscala.com/). It assumes that you write the content in Markdown and use Freemarker as a template engine. The generator supports watching for file changes and is completely unopinionated about organizing front-end assets.
+This is a simple static site generator written in Scala for my web-site [appliedscala.com](http://appliedscala.com/). It assumes that you write the content in Markdown and use Freemarker as a template engine. The generator supports watching for file changes, and it is completely unopinionated about organizing front-end assets.
 
 ## Getting started
 
@@ -29,7 +29,7 @@ $ tree -L 4
 │   └── blog
 │       └── 2016
 │           └── hello-world.md
-├── s2gen.conf
+├── s2gen.json
 ├── site
 │   └── css
 │       └── styles.css
@@ -69,10 +69,13 @@ $ s2gen
 [22:43:30.018] [INFO ] SiteGenerator - Waiting for changes...
 ```
 
-After generating, **s2gen** switches to the monitor mode and starts waiting for file changes.
+After generating, **s2gen** switches to the monitor mode and starts waiting for file changes. 
+If you don't need the monitor mode, you can start **s2gen** with the `-once` flag. 
+In this case, the site is generated only once, after which **s2gen** quits.
+
 Generated HTML files will be placed to the site directory.
 Frontend assets (styles, scripts, images, fonts) could also be added
-to this directory manually and **s2gen** will not touch them.
+to this directory manually, and **s2gen** will not touch them.
 
 ### Custom templates
 
