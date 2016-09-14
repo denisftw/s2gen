@@ -59,7 +59,7 @@ object SiteGenerator {
   val HelpOption = "help"
   val OnceOption = "once"
 
-  def main(args: Array[String]) = {
+  def main(args: Array[String]): Unit = {
 
     val generationMode = parseCommandLineArgs(args)
     val s2conf = parseConfigOrExit(DefaultConfFile)
