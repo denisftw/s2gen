@@ -68,7 +68,7 @@ $ s2gen
 [15:20:11.727] [INFO ] S2Generator - Generation finished
 [15:20:11.738] [INFO ] log - Logging initialized @980ms
 [15:20:11.771] [INFO ] Server - jetty-9.3.11.v20160721
-[15:20:11.845] [INFO ] AbstractConnector - Started ServerConnector@562457e1{HTTP/1.1,[http/1.1]}{0.0.0.0:8080}
+[15:20:11.845] [INFO ] AbstractConnector - Started ServerConnector@562457e1{HTTP/1.1}{0.0.0.0:8080}
 [15:20:11.845] [INFO ] Server - Started @1090ms
 [15:20:11.845] [INFO ] S2HttpServer - The HTTP server has been started on port 8080
 [15:20:11.845] [INFO ] S2Generator - Registering a file watcher
