@@ -52,24 +52,34 @@ $ tree -L 4
 ```
 
 The example configuration can be found in `s2gen.json`.
-The default settings are mostly fine, but feel free to change the `site.host`.
-In order to generate the site, simply type:
+The default settings are mostly fine, but feel free to change the `site.host` and `server.port` properties.
+In order to generate the site, simply type `s2gen`:
 
 ```
 $ s2gen
-[22:43:29.760] [INFO ] SiteGenerator - Cleaning previous version of the site
-[22:43:29.765] [INFO ] SiteGenerator - Generation started
-[22:43:29.977] [INFO ] SiteGenerator - Successfully generated: <archive>
-[22:43:29.979] [INFO ] SiteGenerator - Successfully generated: <sitemap>
-[22:43:29.980] [INFO ] SiteGenerator - Successfully generated: <index>
-[22:43:29.981] [INFO ] SiteGenerator - Successfully generated: <about>
-[22:43:29.983] [INFO ] SiteGenerator - Registering a file watcher
-[22:43:29.985] [INFO ] SiteGenerator - Successfully generated: content/hello-world.md
-[22:43:29.986] [INFO ] SiteGenerator - Generation finished
-[22:43:30.018] [INFO ] SiteGenerator - Waiting for changes...
+[15:20:11.513] [INFO ] S2Generator - Cleaning previous version of the site
+[15:20:11.518] [INFO ] S2Generator - Generation started
+[15:20:11.707] [INFO ] S2Generator - Successfully generated: <archive>
+[15:20:11.709] [INFO ] S2Generator - Successfully generated: <sitemap>
+[15:20:11.711] [INFO ] S2Generator - Successfully generated: <index>
+[15:20:11.712] [INFO ] S2Generator - Successfully generated: <about>
+[15:20:11.722] [INFO ] S2Generator - Successfully generated: 2016/hello-world.md
+[15:20:11.724] [INFO ] S2HttpServer - Starting the HTTP server
+[15:20:11.727] [INFO ] S2Generator - Generation finished
+[15:20:11.738] [INFO ] log - Logging initialized @980ms
+[15:20:11.771] [INFO ] Server - jetty-9.3.11.v20160721
+[15:20:11.845] [INFO ] AbstractConnector - Started ServerConnector@562457e1{HTTP/1.1,[http/1.1]}{0.0.0.0:8080}
+[15:20:11.845] [INFO ] Server - Started @1090ms
+[15:20:11.845] [INFO ] S2HttpServer - The HTTP server has been started on port 8080
+[15:20:11.845] [INFO ] S2Generator - Registering a file watcher
+[15:20:12.135] [INFO ] S2Generator - Waiting for changes...
 ```
 
-After generating, **s2gen** switches to the monitor mode and starts waiting for file changes. 
+After generating, **s2gen** switches to the monitor mode and starts waiting for file changes.
+
+It also starts an embedded Jetty server on a port specified in `s2gen.json` as the `server.port` property.
+If you don't want to start a server in the monitor mode, start **s2gen** with the `-noserver` flag.
+
 If you don't need the monitor mode, you can start **s2gen** with the `-once` flag. 
 In this case, the site is generated only once, after which **s2gen** quits.
 
@@ -80,7 +90,7 @@ to this directory manually, and **s2gen** will not touch them.
 ### Custom templates
 
 The bootstrap example generates the About page as a custom template. In order to add a custom template,
-you must place the Freemarker file in the `templates` directory and add it to the `templates.custom` list in `s2gen.conf`:
+you must place the Freemarker file in the `templates` directory and add it to the `templates.custom` list in `s2gen.json`:
 
 ```json
 {
@@ -100,17 +110,8 @@ Custom templates also have access to common site properties like `title` and `de
 
 ## Testing the site
 
-In order to test the site in the browser, you can use a NodeJS based HTTP server:
-
-```
-$ npm install http-server -g
-$ http-server -p 8080 site
-Starting up http-server, serving site
-Available on:
-  http:127.0.0.1:8080
-  http:192.168.1.103:8080
-Hit CTRL-C to stop the server
-```
+**s2gen** comes with an embedded Jetty server, which starts automatically in the monitor mode and serves static content from the output directory.
+This is more than enough for testing, so you don't need to install anything else.
 
 ## Copyright and License
 

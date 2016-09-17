@@ -18,5 +18,8 @@
     "description": "A blog about everything...",
     "host": "http://example.com/",
     "lastmod": "2016-01-01"
+  },
+  "server": {
+    "port": 8080
   }
 }

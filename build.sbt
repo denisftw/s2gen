@@ -1,6 +1,6 @@
 name := "s2gen"
 
-version := "0.2.5"
+version := "0.2.6"
 
 scalaVersion := "2.11.8"
 
@@ -20,7 +20,8 @@ libraryDependencies ++= Seq(
   "io.monix" %% "monix" % monixVersion,
   "io.circe" %% "circe-core" % circeVersion,
   "io.circe" %% "circe-generic" % circeVersion,
-  "io.circe" %% "circe-parser" % circeVersion
+  "io.circe" %% "circe-parser" % circeVersion,
+  "org.eclipse.jetty" % "jetty-server" % "9.3.11.v20160721"
 )
 
 enablePlugins(JavaAppPackaging)

@@ -27,6 +27,7 @@ object GenerationMode extends Enumeration {
   type GenerationMode = Value
   val Once = Value("Once")
   val Monitor = Value("Monitor")
+  val MonitorNoServer = Value("MonitorNoServer")
 }
 
 case class FileRenderingJob(filename: String, task: Task[Unit])
@@ -35,7 +36,8 @@ case class CustomTemplateGeneration(name: String, template: Template)
 case class Directories(basedir: String, content: String, output: String, archive: String, templates: String)
 case class Templates(post: String, archive: String, sitemap: String, index: String, custom: Seq[String])
 case class Site(title: String, description: String, host: String, lastmod: String)
-case class S2GenConf(directories: Directories, templates: Templates, site: Site)
+case class HttpServer(port: Int)
+case class S2GenConf(directories: Directories, templates: Templates, site: Site, server: HttpServer)
 
 case class MarkdownProcessor(pegDownProcessor: PegDownProcessor, linkRenderer: LinkRenderer)
 case class HtmlTemplates(postTemplate: Template, archiveTemplate: Template,
@@ -48,7 +50,7 @@ object SiteGenerator {
 
   import GenerationMode._
 
-  val logger = LoggerFactory.getLogger("SiteGenerator")
+  val logger = LoggerFactory.getLogger("S2Generator")
   val PropertiesSeparator = "~~~~~~"
   val DefaultConfFile = "s2gen.json"
   val SiteMapFilename = "sitemap.xml"
@@ -58,6 +60,7 @@ object SiteGenerator {
   val InitOption = "init"
   val HelpOption = "help"
   val OnceOption = "once"
+  val NoServerOption = "noserver"
 
   def main(args: Array[String]): Unit = {
 
@@ -98,10 +101,13 @@ object SiteGenerator {
     val cf = regenerate()
     logFutureResult(cf)
 
-    if (generationMode == GenerationMode.Monitor) {
-      implicit val actorSystem = ActorSystem.create("actor-world")
+    if (generationMode != GenerationMode.Once) {
+      val httpServer = StaticServer(outputPaths.siteDir.toString, s2conf.server.port,
+        generationMode == GenerationMode.MonitorNoServer)
+      httpServer.start()
 
       logger.info("Registering a file watcher")
+      implicit val actorSystem = ActorSystem.create("actor-world")
 
       val monitor = RxMonitor()
       val observable = monitor.observable
@@ -125,8 +131,9 @@ object SiteGenerator {
       logger.info(s"Waiting for changes...")
       Runtime.getRuntime.addShutdownHook(new Thread() {
         override def run(): Unit = {
-          logger.info(s"Stopping the monitor")
+          logger.info("Stopping the monitor")
           monitor.stop()
+          httpServer.stop()
         }
       })
     } else {
@@ -152,7 +159,7 @@ object SiteGenerator {
   private def initProjectStructure(): Unit = {
     println("Initializing...")
     val classLoader = this.getClass.getClassLoader
-    copyFromClasspath(classLoader, "init/site/styles.css", "site/css", "styles.css")
+    copyFromClasspath(classLoader, "init/site/css/styles.css", "site/css", "styles.css")
     copyFromClasspath(classLoader, "init/s2gen.json", ".", "s2gen.json")
     copyFromClasspath(classLoader, "init/content/hello-world.md", "content/blog/2016", "hello-world.md")
     val templateNames = Seq("archive.ftl", "blog.ftl", "footer.ftl" , "header.ftl", "index.ftl",
@@ -428,8 +435,9 @@ object SiteGenerator {
     val options = new Options
     options.addOption(OptionVersion, false, "print the version information")
     options.addOption(InitOption, false, "initialize project structure and exit")
-    options.addOption(OnceOption, false, "generates the site once and exits without starting the monitoring")
+    options.addOption(OnceOption, false, "generate the site once and exits without starting the monitoring")
     options.addOption(HelpOption, false, "print this message")
+    options.addOption(NoServerOption, false, "start monitoring without the embedded server")
     val helpFormatter = new HelpFormatter
     val parser = new DefaultParser
     val cmd = parser.parse(options, args)
@@ -447,6 +455,14 @@ object SiteGenerator {
       System.exit(0)
     }
 
-    if (cmd.hasOption(OnceOption)) GenerationMode.Once else GenerationMode.Monitor
+    if (cmd.hasOption(OnceOption)) {
+      GenerationMode.Once
+    } else {
+      if (cmd.hasOption(NoServerOption)) {
+        GenerationMode.MonitorNoServer
+      } else {
+        GenerationMode.Monitor
+      }
+    }
   }
 }
