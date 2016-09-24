@@ -131,7 +131,7 @@ object SiteGenerator {
       val observable = monitor.observable
       val subscription = observable.subscribe(
         onNext = { pathEvent =>
-          logger.info(s"A markdown file has been changed, regenerating the HTML")
+          logger.info(s"File '${pathEvent.path.getFileName}' has been changed, regenerating")
           logFutureResult(regenerate())
         },
         onError = { exc => logger.error("Exception occurred", exc) },
