@@ -30,7 +30,6 @@ object GenerationMode extends Enumeration {
   val MonitorNoServer = Value("MonitorNoServer")
 }
 
-case class FileRenderingJob(task: Task[Unit])
 case class CustomTemplateGeneration(name: String, template: Template)
 
 case class Directories(basedir: String, content: String, output: String, archive: String, templates: String)
@@ -462,7 +461,7 @@ object SiteGenerator {
     val cmd = parser.parse(options, args)
 
     if (cmd.hasOption(OptionVersion)) {
-      val versionNumberT = Try { FileRenderingJob.getClass.getPackage.getImplementationVersion }
+      val versionNumberT = Try { CustomTemplateGeneration.getClass.getPackage.getImplementationVersion }
       val versionNumber = versionNumberT.getOrElse("[dev]")
       println(s"""s2gen version $versionNumber""")
       System.exit(0)
