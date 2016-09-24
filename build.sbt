@@ -1,17 +1,17 @@
 name := "s2gen"
 
-version := "0.2.6"
+version := "0.2.7"
 
 scalaVersion := "2.11.8"
 
 scalacOptions += "-target:jvm-1.6"
 
-val circeVersion = "0.5.1"
+val circeVersion = "0.5.2"
 val monixVersion = "2.0.1"
 
 libraryDependencies ++= Seq(
   "org.pegdown" % "pegdown" % "1.6.0",
-  "org.freemarker" % "freemarker" % "2.3.21",
+  "org.freemarker" % "freemarker" % "2.3.23",
   "org.slf4j" % "slf4j-api" % "1.7.19",
   "ch.qos.logback" %  "logback-classic" % "1.1.6",
   "com.beachape.filemanagement" %% "schwatcher" % "0.3.1",

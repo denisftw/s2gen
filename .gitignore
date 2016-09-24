@@ -1,3 +1,5 @@
 npm-debug.log
 .idea
 target
+temp/*
+!temp/.gitkeep

@@ -30,7 +30,7 @@ object GenerationMode extends Enumeration {
   val MonitorNoServer = Value("MonitorNoServer")
 }
 
-case class FileRenderingJob(filename: String, task: Task[Unit])
+case class FileRenderingJob(task: Task[Unit])
 case class CustomTemplateGeneration(name: String, template: Template)
 
 case class Directories(basedir: String, content: String, output: String, archive: String, templates: String)
@@ -72,30 +72,49 @@ object SiteGenerator {
     val templatesDirName = Paths.get(s2conf.directories.basedir, s2conf.directories.templates).toString
     val outputPaths = getOutputPaths(s2conf)
     val mdContentFiles = recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory)
+    val siteCommonData = Map("title" -> s2conf.site.title, "description" -> s2conf.site.description)
 
     def regenerate(): CancelableFuture[Seq[Unit]] = {
       // Making Freemarker re-read templates on every change
-      val htmlTemplates = createHtmlTemplates(templatesDirName, s2conf)
+      val htmlTemplatesJob = Task.delay { createHtmlTemplates(templatesDirName, s2conf) }
 
-      logger.info("Cleaning previous version of the site")
-      FileUtils.deleteDirectory(outputPaths.archiveOutput.toFile)
-      Files.deleteIfExists(Paths.get(outputPaths.sitemapOutputDir.toString, SiteMapFilename))
-      Files.deleteIfExists(Paths.get(outputPaths.indexOutputDir.toString, IndexFilename))
-
-      val siteCommonData = Map("title" -> s2conf.site.title, "description" -> s2conf.site.description)
-      logger.info("Generation started")
-      val postData = mdContentFiles.map { mdFile =>
-        processMdFile(mdFile, mdProcessor)
+      val cleaningJob = Task.delay {
+        logger.info("Cleaning previous version of the site")
+        FileUtils.deleteDirectory(outputPaths.archiveOutput.toFile)
+        Files.deleteIfExists(Paths.get(outputPaths.sitemapOutputDir.toString, SiteMapFilename))
+        Files.deleteIfExists(Paths.get(outputPaths.indexOutputDir.toString, IndexFilename))
       }
 
-      val archiveJob = generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput, htmlTemplates.archiveTemplate)
-      val sitemapJob = generateSitemap(siteCommonData, postData, outputPaths.sitemapOutputDir, htmlTemplates.sitemapTemplate, Map("siteHost" -> s2conf.site.host, "lastmod" -> s2conf.site.lastmod))
-      val indexJob = generateIndexPage(siteCommonData, outputPaths.indexOutputDir, htmlTemplates.indexTemplate)
-      val customPageJobs = generateCustomPages(siteCommonData, outputPaths.indexOutputDir, htmlTemplates.customTemplates)
-      val postJobs = postData.map { contentObj =>
-        generateSingleBlogFile(siteCommonData, contentObj, outputPaths.siteDir.toString, htmlTemplates.postTemplate)
+      val mdProcessingJob = Task.delay {
+        logger.info("Generation started")
+        val postData = mdContentFiles.map { mdFile =>
+          processMdFile(mdFile, mdProcessor)
+        }
+        postData
       }
-      runTasks(Seq(archiveJob, sitemapJob, indexJob) ++ customPageJobs ++ postJobs)
+
+      val resultT = for {
+        htmlTemplates <- htmlTemplatesJob
+        _ <- cleaningJob
+        postData <- mdProcessingJob
+        archiveJob = generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput,
+          htmlTemplates.archiveTemplate)
+        sitemapJob = generateSitemap(siteCommonData, postData,
+          outputPaths.sitemapOutputDir, htmlTemplates.sitemapTemplate,
+          Map("siteHost" -> s2conf.site.host, "lastmod" -> s2conf.site.lastmod))
+        indexJob = generateIndexPage(siteCommonData, outputPaths.indexOutputDir,
+          htmlTemplates.indexTemplate)
+        customPageJobs = generateCustomPages(siteCommonData, outputPaths.indexOutputDir,
+          htmlTemplates.customTemplates)
+        postJobs = postData.map { contentObj =>
+          generateSingleBlogFile(siteCommonData, contentObj, outputPaths.siteDir.toString,
+            htmlTemplates.postTemplate)
+        }
+        result <- Task.sequence(Seq(archiveJob, sitemapJob, indexJob) ++ customPageJobs ++ postJobs)
+      } yield result
+
+      import monix.execution.Scheduler.Implicits.global
+      resultT.runAsync
     }
 
     val cf = regenerate()
@@ -211,7 +230,7 @@ object SiteGenerator {
   }
 
   private def generateSitemap(siteCommonData: Map[String, String], postData: Seq[Map[String, String]], currentOutputDir: Path,
-                              sitemapTemplate: Template, additionalMap: Map[String, String]): FileRenderingJob = {
+                              sitemapTemplate: Template, additionalMap: Map[String, String]): Task[Unit] = {
     val task = Task.delay {
       val publishedPosts = postData.filter { post =>
         val postStatus = post.get("status")
@@ -231,10 +250,10 @@ object SiteGenerator {
       renderTemplate(sitemapOutputFile, sitemapTemplate, inputProps)
       logger.info(s"Successfully generated: <sitemap>")
     }
-    FileRenderingJob("<sitemap>", task)
+    task
   }
 
-  private def generateIndexPage(siteCommonData: Map[String, String], indexOutputDir: Path, indexTemplate: Template): FileRenderingJob = {
+  private def generateIndexPage(siteCommonData: Map[String, String], indexOutputDir: Path, indexTemplate: Template): Task[Unit] = {
     val task = Task.delay {
       val indexOutputFile = new File(indexOutputDir.toFile, IndexFilename)
       renderTemplate(indexOutputFile, indexTemplate, mapAsJavaMap(Map(
@@ -242,10 +261,10 @@ object SiteGenerator {
       )))
       logger.info(s"Successfully generated: <index>")
     }
-    FileRenderingJob("<index>", task)
+    task
   }
 
-  private def generateCustomPages(siteCommonData: Map[String, String], indexOutputDir: Path, customTemplateGens: Seq[CustomTemplateGeneration]): Seq[FileRenderingJob] = {
+  private def generateCustomPages(siteCommonData: Map[String, String], indexOutputDir: Path, customTemplateGens: Seq[CustomTemplateGeneration]): Seq[Task[Unit]] = {
     customTemplateGens.map { gen =>
       val task = Task.delay {
         val dirName = Paths.get(indexOutputDir.toString, gen.name)
@@ -258,12 +277,12 @@ object SiteGenerator {
         )))
         logger.info(s"Successfully generated: <${gen.name}>")
       }
-      FileRenderingJob(s"<${gen.name}>", task)
+      task
     }
   }
 
   private def generateArchivePage(siteCommonData: Map[String, String], postData: Seq[Map[String, String]],
-            archiveOutput: Path, archiveTemplate: Template): FileRenderingJob = {
+            archiveOutput: Path, archiveTemplate: Template): Task[Unit] = {
     val task = Task.delay {
       val publishedPosts = postData.filter { post =>
         val postStatus = post.get("status")
@@ -281,7 +300,7 @@ object SiteGenerator {
       renderTemplate(archiveOutputFile, archiveTemplate, archiveInput)
       logger.info(s"Successfully generated: <archive>")
     }
-    FileRenderingJob("<archive>", task)
+    task
   }
 
   val PreviewSplitter = """\[\/\/\]\: \# \"__PREVIEW__\""""
@@ -333,7 +352,7 @@ object SiteGenerator {
   }
 
   private def generateSingleBlogFile(siteCommonData: Map[String, String], contentObj: Map[String, String],
-                                globalOutputDir: String, template: Template): FileRenderingJob = {
+                                globalOutputDir: String, template: Template): Task[Unit] = {
     val sourceFilename = contentObj("sourceFilename")
     val task = Task {
       val outputLink = contentObj.getOrElse("link", throw new Exception(
@@ -362,7 +381,7 @@ object SiteGenerator {
       renderTemplate(outputFile, template, input)
       logger.info(s"Successfully generated: $sourceFilename")
     }
-    FileRenderingJob(sourceFilename, task)
+    task
   }
 
   private def renderTemplate(outputFile: File, template: Template, input: java.util.Map[String, _]): Unit = {
@@ -374,10 +393,10 @@ object SiteGenerator {
     }
   }
 
-  private def runTasks(tasks: Seq[FileRenderingJob]): CancelableFuture[Seq[Unit]] = {
+  private def runTasks(tasks: Seq[Task[Unit]]): CancelableFuture[Seq[Unit]] = {
     import monix.execution.Scheduler.Implicits.global
 
-    val resultT = Task.sequence(tasks.map(_.task))
+    val resultT = Task.sequence(tasks)
     resultT.runAsync
   }
 
