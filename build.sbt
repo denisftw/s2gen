@@ -4,7 +4,7 @@ version := "0.2.7"
 
 scalaVersion := "2.11.8"
 
-scalacOptions += "-target:jvm-1.6"
+scalacOptions += "-target:jvm-1.7"
 
 val circeVersion = "0.5.2"
 val monixVersion = "2.0.1"
@@ -21,7 +21,7 @@ libraryDependencies ++= Seq(
   "io.circe" %% "circe-core" % circeVersion,
   "io.circe" %% "circe-generic" % circeVersion,
   "io.circe" %% "circe-parser" % circeVersion,
-  "org.eclipse.jetty" % "jetty-server" % "9.3.11.v20160721"
+  "org.eclipse.jetty" % "jetty-server" % "9.2.19.v20160908"
 )
 
 enablePlugins(JavaAppPackaging)
