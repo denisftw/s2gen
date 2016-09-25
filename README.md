@@ -2,7 +2,7 @@
 
 This is a simple static site generator written in Scala for my web-site [appliedscala.com](http://appliedscala.com/). It uses Freemarker as a template engine and assumes that you write the content in Markdown. The generator supports the monitor mode, comes with an embedded Web server and stays completely unopinionated about organizing front-end assets.
 
-It should work well on any operating system provided that it has JRE8 is installed.
+It should work well on any operating system provided that JRE8 is installed.
 
 ## Getting started
 
