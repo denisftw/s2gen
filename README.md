@@ -115,6 +115,41 @@ Custom templates also have access to common site properties like `title` and `de
 **s2gen** comes with an embedded Jetty server, which starts automatically in the monitor mode and serves static content from the output directory.
 This is more than enough for testing, so you don't need to install anything else.
 
+## Available template values
+
+Inside the template, you will have access to the following values:
+
+|reference|description|
+|---------|-----------|
+|`site.title`|The title of the site as defined in `s2gen.json`|
+|`site.description`|The description of the site as defined in `s2gen.json`|
+|`site.host`|The host name including `http(s)` but excluding the trailing slash as defined in `s2gen.json`|
+|`site.lastmod`|Tha last modification data of the site as a whole in `YYYY-MM-DD` format as defined in `s2gen.json`|
+|`site.title`|The title of the site as defined in `s2gen.json`|
+
+Post have several more values available to them. In particular, the `date`, `status` and `link` properties are mandatory in the header section of your Markdown content file, and they are available in templates as follows:
+
+|reference|description|
+|---------|-----------|
+|`content.date`|The date of the post in `YYYY-MM-DD` format|
+|`content.status`|The status of the post. The post is not added to the blog until it's `published`|
+|`content.link`|The URL of the post relative to `site.host`|
+
+These values are available automatically to all posts:
+
+|reference|description|
+|---------|-----------|
+|`content.body`|The rendered HTML of the post|
+|`content.preview`|The HTML version of the preview section (see the example for the preview markers)|
+|`content.previewText`|The text version of the preview section (see the example for the preview markers)|
+
+In addition, you can other values by putting custom keys to the header section of the Markdown file. For example:
+
+|reference|description|
+|---------|-----------|
+|`content.title`|The rendered HTML of the post|
+
+
 ## Copyright and License
 
 Licensed under the MIT License, see the LICENSE file.
