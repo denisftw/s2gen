@@ -6,7 +6,10 @@ status=published
 link=blog/2016/hello-world
 ~~~~~~
 
+[//]: # "__PREVIEW__"
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Proin ultricies vehicula efficitur. Phasellus elit magna, cursus at convallis in, varius eu velit. Aliquam interdum orci ut velit efficitur, ac varius quam mollis. Sed vel ornare leo. Mauris faucibus magna mattis urna pretium, a vulputate tortor laoreet. Nulla facilisi. Nulla dignissim sollicitudin fermentum. Praesent id cursus eros. Sed commodo leo eget leo rhoncus pellentesque. Maecenas varius orci eget odio lacinia elementum. Nam at blandit orci. Ut vel mi vitae nisi eleifend elementum. Praesent dapibus dui vitae sagittis faucibus. Fusce faucibus tortor augue, a sollicitudin nibh efficitur id. Nam consequat eros augue, eget varius ipsum faucibus sit amet. Cras libero enim, ultricies id enim non, varius molestie nulla.
+
+[//]: # "__PREVIEW__"
 
 ## Ullamcorper imperdiet dignissim
 

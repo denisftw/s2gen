@@ -20,6 +20,7 @@ import com.beachape.filemanagement.RxMonitor
 import java.nio.file.StandardWatchEventKinds._
 
 import monix.execution.CancelableFuture
+import org.htmlcleaner.HtmlCleaner
 
 import scala.collection.JavaConversions._
 
@@ -68,12 +69,15 @@ object SiteGenerator {
 
     val contentDirFile = Paths.get(s2conf.directories.basedir, s2conf.directories.content)
     val mdProcessor = createMarkdownProcessor(s2conf.site.host)
+    val htmlCleaner = new HtmlCleaner()
     val templatesDirName = Paths.get(s2conf.directories.basedir, s2conf.directories.templates).toString
     val outputPaths = getOutputPaths(s2conf)
-    val mdContentFiles = recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory)
-    val siteCommonData = Map("title" -> s2conf.site.title, "description" -> s2conf.site.description)
+    val siteCommonData = Map("title" -> s2conf.site.title, "description" -> s2conf.site.description,
+      "siteHost" -> s2conf.site.host, "lastmod" -> s2conf.site.lastmod)
 
     def regenerate(): CancelableFuture[Seq[Unit]] = {
+      // Rereading content files on every change in case some of them are added/deleted
+      val mdContentFiles = recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory)
       // Making Freemarker re-read templates on every change
       val htmlTemplatesJob = Task.delay { createHtmlTemplates(templatesDirName, s2conf) }
 
@@ -87,7 +91,7 @@ object SiteGenerator {
       val mdProcessingJob = Task.delay {
         logger.info("Generation started")
         val postData = mdContentFiles.map { mdFile =>
-          processMdFile(mdFile, mdProcessor)
+          processMdFile(mdFile, htmlCleaner, mdProcessor)
         }
         postData
       }
@@ -99,8 +103,7 @@ object SiteGenerator {
         archiveJob = generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput,
           htmlTemplates.archiveTemplate)
         sitemapJob = generateSitemap(siteCommonData, postData,
-          outputPaths.sitemapOutputDir, htmlTemplates.sitemapTemplate,
-          Map("siteHost" -> s2conf.site.host, "lastmod" -> s2conf.site.lastmod))
+          outputPaths.sitemapOutputDir, htmlTemplates.sitemapTemplate)
         indexJob = generateIndexPage(siteCommonData, outputPaths.indexOutputDir,
           htmlTemplates.indexTemplate)
         customPageJobs = generateCustomPages(siteCommonData, outputPaths.indexOutputDir,
@@ -229,7 +232,7 @@ object SiteGenerator {
   }
 
   private def generateSitemap(siteCommonData: Map[String, String], postData: Seq[Map[String, String]], currentOutputDir: Path,
-                              sitemapTemplate: Template, additionalMap: Map[String, String]): Task[Unit] = {
+                              sitemapTemplate: Template): Task[Unit] = {
     val task = Task.delay {
       val publishedPosts = postData.filter { post =>
         val postStatus = post.get("status")
@@ -237,7 +240,7 @@ object SiteGenerator {
       }
       val posts = seqAsJavaList(publishedPosts.map { post => mapAsJavaMap(post) }.sortWith(_.get("date") > _.get("date")))
       val inputProps = mapAsJavaMap {
-        additionalMap ++ Map(
+        Map(
           "posts" -> posts,
           "site" -> mapAsJavaMap(siteCommonData)
         )
@@ -316,7 +319,7 @@ object SiteGenerator {
     }
   }
 
-  private def processMdFile(mdFile: File,
+  private def processMdFile(mdFile: File, htmlCleaner: HtmlCleaner,
                             mdProcessor: MarkdownProcessor): Map[String, String] = {
     val postContent = Source.fromFile(mdFile).getLines().toList
     val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
@@ -341,11 +344,14 @@ object SiteGenerator {
     mapBuilder ++= Map(
       "body" -> renderedMdContent,
       "sourceDirectoryPath" -> mdFile.getParentFile.getAbsolutePath,
-      "sourceFilename" -> simpleFilename,
-      "uri" -> contentPropertyMap("link")
+      "sourceFilename" -> simpleFilename
     )
     htmlPreview.foreach { preview =>
-      mapBuilder += "preview" -> preview
+      val previewText = htmlCleaner.clean(preview).getText.toString
+      mapBuilder ++= Map(
+        "preview" -> preview,
+        "previewText" -> previewText
+      )
     }
     mapBuilder.result()
   }

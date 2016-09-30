@@ -1,6 +1,6 @@
 name := "s2gen"
 
-version := "0.2.7"
+version := "0.2.8"
 
 scalaVersion := "2.11.8"
 
@@ -21,7 +21,8 @@ libraryDependencies ++= Seq(
   "io.circe" %% "circe-core" % circeVersion,
   "io.circe" %% "circe-generic" % circeVersion,
   "io.circe" %% "circe-parser" % circeVersion,
-  "org.eclipse.jetty" % "jetty-server" % "9.3.11.v20160721"
+  "org.eclipse.jetty" % "jetty-server" % "9.3.11.v20160721",
+  "net.sourceforge.htmlcleaner" % "htmlcleaner" % "2.16"
 )
 
 enablePlugins(JavaAppPackaging)

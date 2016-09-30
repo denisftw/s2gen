@@ -4,12 +4,12 @@
   xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9
     http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd">
     <url>
-        <loc>${siteHost}/</loc>
-        <lastmod>${lastmod}</lastmod>
+        <loc>${site.siteHost}/</loc>
+        <lastmod>${site.lastmod}</lastmod>
     </url>
 <#list posts as content>
     <url>
-        <loc>${siteHost}/${content.link}</loc>
+        <loc>${site.siteHost}/${content.link}</loc>
         <lastmod>${content.date}</lastmod>
     </url>
 </#list>
