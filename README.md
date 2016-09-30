@@ -117,25 +117,24 @@ This is more than enough for testing, so you don't need to install anything else
 
 ## Available template values
 
-Inside the template, you will have access to the following values:
+Inside the template, you will have access to the following values as they are defined in `s2gen.json`:
 
 |reference|description|
 |---------|-----------|
-|`site.title`|The title of the site as defined in `s2gen.json`|
-|`site.description`|The description of the site as defined in `s2gen.json`|
-|`site.host`|The host name including `http(s)` but excluding the trailing slash as defined in `s2gen.json`|
-|`site.lastmod`|Tha last modification data of the site as a whole in `YYYY-MM-DD` format as defined in `s2gen.json`|
-|`site.title`|The title of the site as defined in `s2gen.json`|
+|`site.title`|The title of the site|
+|`site.description`|The description of the site|
+|`site.host`|The host name including `http(s)` but excluding the trailing slash|
+|`site.lastmod`|Tha last modification data of the site as a whole in `YYYY-MM-DD` format|
+|`site.title`|The title of the site|
 
-Post have several more values available to them. In particular, the `date`, `status` and `link` properties are mandatory in the header section of your Markdown content file, and they are available in templates as follows:
+Posts have several more values available to them. In particular, the `date` and `status` properties are mandatory in the header section of Markdown content files, and they are available in templates as follows:
 
 |reference|description|
 |---------|-----------|
 |`content.date`|The date of the post in `YYYY-MM-DD` format|
 |`content.status`|The status of the post. The post is not added to the blog until it's `published`|
-|`content.link`|The URL of the post relative to `site.host`|
 
-These values are available automatically to all posts:
+The following values are available automatically to all posts:
 
 |reference|description|
 |---------|-----------|
@@ -143,11 +142,8 @@ These values are available automatically to all posts:
 |`content.preview`|The HTML version of the preview section (see the example for the preview markers)|
 |`content.previewText`|The text version of the preview section (see the example for the preview markers)|
 
-In addition, you can other values by putting custom keys to the header section of the Markdown file. For example:
-
-|reference|description|
-|---------|-----------|
-|`content.title`|The rendered HTML of the post|
+You can also add other values by putting custom keys to the header section of the Markdown file. 
+They will be available in templates as well. For example the `title` property will be available as `content.title` and so on.
 
 
 ## Copyright and License
