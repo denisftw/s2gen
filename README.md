@@ -97,7 +97,8 @@ you must place the Freemarker file in the `templates` directory and add it to th
 ```json
 {
   "templates": {
-    "custom": ["about.ftl"]
+    "custom": ["about.ftl"],
+    "customXml": ["feed.ftl", "sitemap.ftl"]
   }
 }
 ```
@@ -107,6 +108,8 @@ For `about.ftl`, the output HTML file will be placed into `./site/about/index.ht
 ```html
 <a href="/about">About</a>
 ```
+
+For `feed.ftl` and `sitemap.ftl`, the output XML files will be put into the `./site` directory.
 
 Custom templates also have access to common site properties like `title` and `description`.
 
@@ -124,7 +127,7 @@ Inside the template, you will have access to the following values as they are de
 |`site.title`|The title of the site|
 |`site.description`|The description of the site|
 |`site.host`|The host name including `http(s)` but excluding the trailing slash|
-|`site.lastmod`|Tha last modification data of the site as a whole in `YYYY-MM-DD` format|
+|`site.lastmod`|Tha last modification data of the site as a whole in `YYYY-MM-DD` format (for `sitemap`)|
 |`site.title`|The title of the site|
 
 Posts have several more values available to them. In particular, the `date` and `status` properties are mandatory in the header section of Markdown content files, and they are available in templates as follows:
@@ -132,6 +135,7 @@ Posts have several more values available to them. In particular, the `date` and 
 |reference|description|
 |---------|-----------|
 |`content.date`|The date of the post in `YYYY-MM-DD` format|
+|`content.dateJ`|The date of the post as `java.util.Date`|
 |`content.status`|The status of the post. The post is not added to the blog until it's `published`|
 
 The following values are available automatically to all posts:
@@ -141,6 +145,15 @@ The following values are available automatically to all posts:
 |`content.body`|The rendered HTML of the post|
 |`content.preview`|The HTML version of the preview section (see the example for the preview markers)|
 |`content.previewText`|The text version of the preview section (see the example for the preview markers)|
+
+Custom templates (both XML and HTML) and the archive template have access to the following:
+
+|reference|description|
+|---------|-----------|
+|`posts`|All published posts sorted by date as `java.util.List`|
+|`site.lastPubDateJ`|The date of the last post as `java.util.Date`|
+|`site.lastBuildDateJ`|The date of the last site generation as `java.util.Date`|
+
 
 You can also add other values by putting custom keys to the header section of the Markdown file. 
 They will be available in templates as well. For example the `title` property will be available as `content.title` and so on.

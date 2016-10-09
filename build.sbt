@@ -1,13 +1,13 @@
 name := "s2gen"
 
-version := "0.2.8"
+version := "0.2.9"
 
 scalaVersion := "2.11.8"
 
 scalacOptions += "-target:jvm-1.8"
 
-val circeVersion = "0.5.2"
-val monixVersion = "2.0.1"
+val circeVersion = "0.5.3"
+val monixVersion = "2.0.3"
 
 libraryDependencies ++= Seq(
   "org.pegdown" % "pegdown" % "1.6.0",
