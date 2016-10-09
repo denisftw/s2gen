@@ -259,7 +259,7 @@ object SiteGenerator {
     val allPosts = publishedPosts.map { post =>
       mapAsJavaMap(addJavaDate(post))
     }.sortWith(_("dateJ").asInstanceOf[JavaDate].getTime > _("dateJ").asInstanceOf[JavaDate].getTime)
-    val lastUpdated = allPosts.lastOption.map(_("dateJ").asInstanceOf[JavaDate]).getOrElse(new JavaDate())
+    val lastUpdated = allPosts.headOption.map(_("dateJ").asInstanceOf[JavaDate]).getOrElse(new JavaDate())
     val posts = seqAsJavaList(allPosts)
     val inputProps = mapAsJavaMap {
       Map(
