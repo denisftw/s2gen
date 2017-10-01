@@ -1,6 +1,7 @@
 package com.appliedscala.generator
 
-import java.io.{File, FileWriter, PrintWriter}
+import java.io._
+import java.nio.charset.Charset
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file._
 
@@ -14,16 +15,18 @@ import freemarker.template.{Configuration, Template, TemplateExceptionHandler}
 import org.pegdown._
 
 import scala.io.Source
-import scala.util.Try
+import scala.util.{Properties, Try}
 import monix.eval.Task
 import com.beachape.filemanagement.RxMonitor
 import java.nio.file.StandardWatchEventKinds._
 import java.text.SimpleDateFormat
+import java.util.Properties
 
 import monix.execution.CancelableFuture
 import org.htmlcleaner.HtmlCleaner
 
 import scala.collection.JavaConversions._
+import scala.collection.mutable.ListBuffer
 
 object GenerationMode extends Enumeration {
   type GenerationMode = Value
@@ -37,6 +40,7 @@ case class CustomXmlTemplateDescription(name: String, template: Template)
 
 case class Directories(basedir: String, content: String, output: String, archive: String, templates: String)
 case class Templates(post: String, archive: String, index: String, custom: Seq[String], customXml: Seq[String])
+case class TranslationBundle(langCode: String, messages: Map[String, Object], siteDir: Path)
 case class Site(title: String, description: String, host: String, lastmod: String)
 case class HttpServer(port: Int)
 case class S2GenConf(directories: Directories, templates: Templates, site: Site, server: HttpServer)
@@ -45,7 +49,7 @@ case class MarkdownProcessor(pegDownProcessor: PegDownProcessor, linkRenderer: L
 case class HtmlTemplates(postTemplate: Template, archiveTemplate: Template,
                          indexTemplate: Template,
                          customHtmlTemplates: Seq[CustomHtmlTemplateDescription], customXmlTemplates: Seq[CustomXmlTemplateDescription])
-case class OutputPaths(archiveOutput: Path, indexOutputDir: Path, siteDir: Path)
+case class OutputPaths(archiveOutput: String, indexOutputDir: Path, siteDir: Path)
 
 object SiteGenerator {
 
@@ -74,6 +78,7 @@ object SiteGenerator {
     val mdProcessor = createMarkdownProcessor(s2conf.site.host)
     val htmlCleaner = new HtmlCleaner()
     val templatesDirName = Paths.get(s2conf.directories.basedir, s2conf.directories.templates).toString
+    val i18nDirName = Paths.get(s2conf.directories.basedir, s2conf.directories.templates, "i18n")
     val outputPaths = getOutputPaths(s2conf)
     val settingsCommonData = Map("title" -> s2conf.site.title, "description" -> s2conf.site.description,
       "siteHost" -> s2conf.site.host, "lastmod" -> s2conf.site.lastmod)
@@ -81,6 +86,9 @@ object SiteGenerator {
     def regenerate(): CancelableFuture[Seq[Unit]] = {
       // Rereading content files on every change in case some of them are added/deleted
       val mdContentFiles = recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory)
+
+      val translations = buildTranslations(i18nDirName, outputPaths.siteDir)
+
       // Making Freemarker re-read templates on every change
       val htmlTemplatesJob = Task.delay { createTemplates(templatesDirName, s2conf) }
       // Last build date changes on every rebuild
@@ -88,7 +96,7 @@ object SiteGenerator {
 
       val cleaningJob = Task.delay {
         logger.info("Cleaning previous version of the site")
-        FileUtils.deleteDirectory(outputPaths.archiveOutput.toFile)
+        FileUtils.deleteDirectory(new File(outputPaths.archiveOutput))
         Files.deleteIfExists(Paths.get(outputPaths.indexOutputDir.toString, IndexFilename))
       }
 
@@ -105,15 +113,12 @@ object SiteGenerator {
         _ <- cleaningJob
         postData <- mdProcessingJob
         archiveJob = generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput,
-          htmlTemplates.archiveTemplate)
+          htmlTemplates.archiveTemplate, translations)
         indexJob = generateIndexPage(siteCommonData, outputPaths.indexOutputDir,
-          htmlTemplates.indexTemplate)
+          htmlTemplates.indexTemplate, translations)
         customPageJobs = generateCustomPages(siteCommonData, postData, outputPaths.indexOutputDir,
-          htmlTemplates.customHtmlTemplates, htmlTemplates.customXmlTemplates)
-        postJobs = postData.map { contentObj =>
-          generateSingleBlogFile(siteCommonData, contentObj, outputPaths.siteDir.toString,
-            htmlTemplates.postTemplate)
-        }
+          htmlTemplates.customHtmlTemplates, htmlTemplates.customXmlTemplates, translations)
+        postJobs = generatePostPages(postData, siteCommonData, outputPaths, htmlTemplates, translations)
         result <- Task.sequence(Seq(archiveJob, indexJob) ++ customPageJobs ++ postJobs)
       } yield result
 
@@ -166,6 +171,27 @@ object SiteGenerator {
 
       Await.result(cf, 5.seconds)
     }
+  }
+
+  private def buildTranslations(i18nDirName: Path, siteDir: Path): Seq[TranslationBundle] = {
+    val i18nListBuffer = new ListBuffer[TranslationBundle]
+    if (Files.isDirectory(i18nDirName)) {
+      i18nDirName.toFile.listFiles().map { propertyFile =>
+        import scala.collection.JavaConverters._
+        val langCode = propertyFile.getName.split("\\.")(0)
+        val prop = new Properties()
+        val fileStream = new FileInputStream(propertyFile)
+        prop.load(new InputStreamReader(fileStream, Charset.forName("UTF-8")))
+        fileStream.close()
+        if (langCode == "default") {
+          i18nListBuffer += TranslationBundle("", prop.asScala.toMap, new File(siteDir.toFile, "").toPath)
+        } else {
+          i18nListBuffer += TranslationBundle(langCode, prop.asScala.toMap, new File(siteDir.toFile, langCode).toPath)
+        }
+      }
+    }
+    val result = i18nListBuffer.result()
+    if (result.isEmpty) Seq(TranslationBundle("", Map.empty[String, Object], new File(siteDir.toFile, "").toPath)) else result
   }
 
   private def logFutureResult(cf: CancelableFuture[Seq[Unit]]): Unit = {
@@ -233,13 +259,36 @@ object SiteGenerator {
     cfg
   }
 
-  private def generateIndexPage(siteCommonData: Map[String, Object], indexOutputDir: Path, indexTemplate: Template): Task[Unit] = {
+  private def generatePostPages(postData: Seq[Map[String, String]], siteCommonData: Map[String, Object], outputPaths: OutputPaths,
+                                htmlTemplates: HtmlTemplates, translations: Seq[TranslationBundle]): Seq[Task[Unit]] = {
+    translations.flatMap { langBundle =>
+      val langOutputDir = langBundle.siteDir.toFile
+      if (!langOutputDir.exists()) {
+        langOutputDir.mkdir()
+      }
+      postData.map { contentObj =>
+        generateSingleBlogFile(siteCommonData, contentObj, langOutputDir.toString,
+          htmlTemplates.postTemplate, langBundle)
+      }
+    }
+  }
+
+  private def generateIndexPage(siteCommonData: Map[String, Object], indexOutputDir: Path,
+                  indexTemplate: Template, translations: Seq[TranslationBundle]): Task[Unit] = {
     val task = Task.delay {
-      val indexOutputFile = new File(indexOutputDir.toFile, IndexFilename)
-      renderTemplate(indexOutputFile, indexTemplate, mapAsJavaMap(Map(
-        "site" -> mapAsJavaMap(siteCommonData)
-      )))
-      logger.info(s"Successfully generated: <index>")
+      translations.foreach { langBundle =>
+        val langOutputDir = langBundle.siteDir.toFile
+        if (!langOutputDir.exists()) {
+          langOutputDir.mkdir()
+        }
+        val indexOutputFile = new File(langOutputDir, IndexFilename)
+        renderTemplate(indexOutputFile, indexTemplate, mapAsJavaMap(Map(
+          "site" -> mapAsJavaMap(siteCommonData),
+          "messages" -> mapAsJavaMap(langBundle.messages),
+          "currentLanguage" -> langBundle.langCode
+        )))
+        logger.info(s"Successfully generated: <index> ${langBundle.langCode}")
+      }
     }
     task
   }
@@ -250,7 +299,8 @@ object SiteGenerator {
     post + ("dateJ" -> dateJ)
   }
 
-  private def buildInputProps(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]]):
+  private def buildInputProps(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
+                              translationBundle: TranslationBundle):
   Task[JavaMap[String, Object]] = Task.delay {
     val publishedPosts = postData.filter { post =>
       val postStatus = post.get("status")
@@ -264,59 +314,68 @@ object SiteGenerator {
     val inputProps = mapAsJavaMap {
       Map(
         "posts" -> posts,
-        "site" -> mapAsJavaMap(siteCommonData ++ Map("lastPubDateJ" -> lastUpdated))
+        "site" -> mapAsJavaMap(siteCommonData ++ Map("lastPubDateJ" -> lastUpdated)),
+        "messages" -> mapAsJavaMap(translationBundle.messages),
+        "currentLanguage" -> translationBundle.langCode
       )
     }
     inputProps
   }
 
   private def generateCustomPages(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]], indexOutputDir: Path,
-    customTemplateGens: Seq[CustomHtmlTemplateDescription], customXmlTemplateDescriptions: Seq[CustomXmlTemplateDescription]):
+    customTemplateGens: Seq[CustomHtmlTemplateDescription], customXmlTemplateDescriptions: Seq[CustomXmlTemplateDescription],
+                                  translations: Seq[TranslationBundle]):
     Seq[Task[Unit]] = {
 
-    val taskInputProps = buildInputProps(siteCommonData, postData)
-    val htmlPart = customTemplateGens.map { gen =>
-      val task = taskInputProps.map { inputProps =>
-        val dirName = Paths.get(indexOutputDir.toString, gen.name)
-        if (Files.notExists(dirName)) {
-          Files.createDirectories(dirName)
+    val tasks = translations.map { translationBundle =>
+      val taskInputProps = buildInputProps(siteCommonData, postData, translationBundle)
+      val htmlPart = customTemplateGens.map { gen =>
+        taskInputProps.map { inputProps =>
+          val dirName = Paths.get(translationBundle.siteDir.toFile.toString, gen.name)
+          if (Files.notExists(dirName)) {
+            Files.createDirectories(dirName)
+          }
+          val indexOutputFile = new File(dirName.toString, IndexFilename)
+          renderTemplate(indexOutputFile, gen.template, inputProps)
+          logger.info(s"Successfully generated: <${gen.name}> ${translationBundle.langCode}")
         }
-        val indexOutputFile = new File(dirName.toString, IndexFilename)
-        renderTemplate(indexOutputFile, gen.template, inputProps)
-        logger.info(s"Successfully generated: <${gen.name}>")
       }
-      task
-    }
 
-    val xmlPart = customXmlTemplateDescriptions.map { gen =>
-      val task = taskInputProps.map { inputProps =>
-        val dirName = Paths.get(indexOutputDir.toString)
-        if (Files.notExists(dirName)) {
-          Files.createDirectories(dirName)
+      val xmlPart = customXmlTemplateDescriptions.map { gen =>
+        taskInputProps.map { inputProps =>
+          val dirName = Paths.get(translationBundle.siteDir.toFile.toString)
+          if (Files.notExists(dirName)) {
+            Files.createDirectories(dirName)
+          }
+          val indexOutputFile = new File(dirName.toString, gen.name)
+          renderTemplate(indexOutputFile, gen.template, inputProps)
+          logger.info(s"Successfully generated: <${gen.name}> ${translationBundle.langCode}")
         }
-        val indexOutputFile = new File(dirName.toString, gen.name)
-        renderTemplate(indexOutputFile, gen.template, inputProps)
-        logger.info(s"Successfully generated: <${gen.name}>")
       }
-      task
-    }
 
-    htmlPart ++ xmlPart
+      Task.sequence(htmlPart ++ xmlPart).map(_ => ())
+    }
+    tasks
   }
 
   private def generateArchivePage(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
-            archiveOutput: Path, archiveTemplate: Template): Task[Unit] = {
-    val inputPropsTask = buildInputProps(siteCommonData, postData)
-    val task = inputPropsTask.map { inputProps =>
-      if (Files.notExists(archiveOutput)) {
-        Files.createDirectories(archiveOutput)
+            archiveOutput: String, archiveTemplate: Template, translations: Seq[TranslationBundle]): Task[Unit] = {
+
+      val tasks = translations.map { langBundle =>
+        val inputPropsTask = buildInputProps(siteCommonData, postData, langBundle)
+        val task = inputPropsTask.map { inputProps =>
+          val langOutputDir = new File(langBundle.siteDir.toFile, archiveOutput)
+          if (!langOutputDir.exists()) {
+            langOutputDir.mkdirs()
+          }
+          val archiveOutputFile = new File(langOutputDir, "index.html")
+          renderTemplate(archiveOutputFile, archiveTemplate, inputProps)
+          logger.info(s"Successfully generated: <archive> ${langBundle.langCode}")
+        }
+        task
       }
-      val archiveOutputFile = new File(archiveOutput.toFile, "index.html")
-      renderTemplate(archiveOutputFile, archiveTemplate, inputProps)
-      logger.info(s"Successfully generated: <archive>")
+      Task.sequence(tasks).map(_ => ())
     }
-    task
-  }
 
   val PreviewSplitter = """\[\/\/\]\: \# \"__PREVIEW__\""""
 
@@ -370,34 +429,40 @@ object SiteGenerator {
   }
 
   private def generateSingleBlogFile(siteCommonData: Map[String, Object], contentObj: Map[String, String],
-                                globalOutputDir: String, template: Template): Task[Unit] = {
+                                globalOutputDir: String, template: Template, langBundle: TranslationBundle): Task[Unit] = {
     val sourceFilename = contentObj("sourceFilename")
     val task = Task {
       val outputLink = contentObj.getOrElse("link", throw new Exception(
         s"The required link property is not specified for $sourceFilename"))
 
-      val linkLastPart = outputLink.split("/").last
-      val (outputDir, outputFilename) = if (linkLastPart.endsWith(".html")) {
-        val localOutputDir = Paths.get(globalOutputDir, Paths.get(outputLink).getParent.toString)
-        val outputFilename = linkLastPart
-        (localOutputDir, outputFilename)
-      } else {
-        val localOutputDir = Paths.get(globalOutputDir, outputLink)
-        val outputFilename = "index.html"
-        (localOutputDir, outputFilename)
-      }
+      val maybeLanguage = contentObj.get("language")
+      if ((maybeLanguage.isDefined && maybeLanguage.contains(langBundle.langCode)) ||
+          (maybeLanguage.isEmpty && langBundle.langCode.length == 0)) {
+        val linkLastPart = outputLink.split("/").last
+        val (outputDir, outputFilename) = if (linkLastPart.endsWith(".html")) {
+          val localOutputDir = Paths.get(globalOutputDir, Paths.get(outputLink).getParent.toString)
+          val outputFilename = linkLastPart
+          (localOutputDir, outputFilename)
+        } else {
+          val localOutputDir = Paths.get(globalOutputDir, outputLink)
+          val outputFilename = "index.html"
+          (localOutputDir, outputFilename)
+        }
 
-      if (Files.notExists(outputDir)) {
-        Files.createDirectories(outputDir)
-      }
+        if (Files.notExists(outputDir)) {
+          Files.createDirectories(outputDir)
+        }
 
-      val input = mapAsJavaMap { Map(
-        "content" -> mapAsJavaMap(addJavaDate(contentObj)),
-        "site" -> mapAsJavaMap(siteCommonData)
-      ) }
-      val outputFile = new File(outputDir.toFile, outputFilename)
-      renderTemplate(outputFile, template, input)
-      logger.info(s"Successfully generated: $sourceFilename")
+        val input = mapAsJavaMap { Map(
+          "content" -> mapAsJavaMap(addJavaDate(contentObj)),
+          "site" -> mapAsJavaMap(siteCommonData),
+          "messages" -> mapAsJavaMap(langBundle.messages),
+          "currentLanguage" -> langBundle.langCode
+        ) }
+        val outputFile = new File(outputDir.toFile, outputFilename)
+        renderTemplate(outputFile, template, input)
+        logger.info(s"Successfully generated: $sourceFilename ${langBundle.langCode}")
+      }
     }
     task
   }
@@ -421,7 +486,7 @@ object SiteGenerator {
   private def getOutputPaths(s2conf: S2GenConf): OutputPaths = {
     val siteDirPath = Paths.get(s2conf.directories.basedir, s2conf.directories.output)
     val siteDir = siteDirPath.toString
-    val archiveOutput = Paths.get(siteDir, s2conf.directories.archive)
+    val archiveOutput = s2conf.directories.archive
     val indexOutputDir = Paths.get(siteDir)
     OutputPaths(archiveOutput, indexOutputDir, siteDirPath)
   }
