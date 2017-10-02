@@ -129,6 +129,7 @@ Inside the template, you will have access to the following values as they are de
 |`site.host`|The host name including `http(s)` but excluding the trailing slash|
 |`site.lastmod`|Tha last modification data of the site as a whole in `YYYY-MM-DD` format (for `sitemap`)|
 |`site.title`|The title of the site|
+|`currentLanguage`|The current language (only available in I18N mode)|
 
 Posts have several more values available to them. In particular, the `date` and `status` properties are mandatory in the header section of Markdown content files, and they are available in templates as follows:
 
@@ -158,6 +159,41 @@ Custom templates (both XML and HTML) and the archive template have access to the
 You can also add other values by putting custom keys to the header section of the Markdown file. 
 They will be available in templates as well. For example the `title` property will be available as `content.title` and so on.
 
+
+## I18N support
+
+You can instruct **s2gen** to build localized variants of your Web-site alongside the default one. This way, the default version will be available at the root address `/`, whereas localized versions will be served from `/<langCode>`. 
+
+In order to enable the I18N support, you need to create a directory called `i18n` and put it in `templates`. The `i18n` directory should contain files with message translations for your templates, for example,
+
+* `default.properties`
+* `ru.properties`
+* `es.propserties`
+
+These are Java properties files and they can contain UTF8 and HTML. Defined translations will be available in templates files with the `message.` prefix, so if you define a property called `main_slogan`, you can access it in a template using `${messages.main_slogan}`.
+
+Templates will also have access to a special variable called `currentLanguage`. For localized versions, it will return the language code (the name of the `.properties` file). For the default version, it will return the empty string.
+
+You can write posts in different languages. 
+If you add to a post a special property called `language` and set to, say, 
+`es`, then this post will be only available to the corresponding version 
+of the Web-site. You don't need to add this property for posts 
+in the *default* language, but you can do that - just make sure that 
+you set it to empty string. Then you can use Freemarker conditions to render feed-like pages:
+
+```html
+  <#list posts as post>
+    <#if post.status == "published" && ((post.language?? && 
+        currentLanguage == post.language) ||
+        (!post.language?? && currentLanguage == ""))>
+    <li>
+        <div class="excerpt">${post.previewText}</div>
+    </li>
+    </#if>
+  </#list>
+```
+
+The same trick can be used for rendering archive pages and sitemaps.
 
 ## Copyright and License
 
