@@ -181,7 +181,7 @@ of the Web-site. You don't need to add this property for posts
 in the *default* language, but you can do that - just make sure that 
 you set it to empty string. Then you can use Freemarker conditions to render feed-like pages:
 
-```html
+```text
   <#list posts as post>
     <#if post.status == "published" && ((post.language?? && 
         currentLanguage == post.language) ||
