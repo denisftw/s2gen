@@ -244,7 +244,7 @@ object SiteGenerator {
   private def createLinkRenderer(siteUrl: String): LinkRenderer = {
     new LinkRenderer() {
       override def render(node: ExpLinkNode, text: String): Rendering = {
-        if (!node.url.contains(siteUrl)) {
+        if (!node.url.startsWith("/") && !node.url.contains(siteUrl)) {
           super.render(node, text).withAttribute("target", "_blank")
         } else super.render(node, text)
       }
