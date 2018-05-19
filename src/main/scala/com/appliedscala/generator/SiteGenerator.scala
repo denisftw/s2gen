@@ -266,7 +266,9 @@ object SiteGenerator {
       if (!langOutputDir.exists()) {
         langOutputDir.mkdir()
       }
-      postData.map { contentObj =>
+      postData.filter { obj =>
+        obj.get("type").contains("post")
+      } map { contentObj =>
         generateSingleBlogFile(siteCommonData, contentObj, langOutputDir.toString,
           htmlTemplates.postTemplate, langBundle)
       }
@@ -302,18 +304,31 @@ object SiteGenerator {
   private def buildInputProps(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
                               translationBundle: TranslationBundle):
   Task[JavaMap[String, Object]] = Task.delay {
-    val publishedPosts = postData.filter { post =>
+    val (publishedPosts, miscArticles)= postData.filter { post =>
       val postStatus = post.get("status")
       postStatus.contains("published")
+    }.partition { post =>
+      val postType = post.get("type")
+      postType.contains("post")
     }
     val allPosts = publishedPosts.map { post =>
       mapAsJavaMap(addJavaDate(post))
     }.sortWith(_("dateJ").asInstanceOf[JavaDate].getTime > _("dateJ").asInstanceOf[JavaDate].getTime)
+    val allMiscPosts = miscArticles.groupBy(_("title")).map { case (key, translations) =>
+      val byTr = translations.groupBy{ obj =>
+        obj.get("language").getOrElse("")
+      }.map { case (key2, red) =>
+        (key2, mapAsJavaMap(red.head))
+      }
+      (key, mapAsJavaMap(byTr))
+    }
     val lastUpdated = allPosts.headOption.map(_("dateJ").asInstanceOf[JavaDate]).getOrElse(new JavaDate())
-    val posts = seqAsJavaList(allPosts)
+    val blogPosts = seqAsJavaList(allPosts)
+    val miscPosts = mapAsJavaMap(allMiscPosts)
     val inputProps = mapAsJavaMap {
       Map(
-        "posts" -> posts,
+        "posts" -> blogPosts,
+        "misc" -> miscPosts,
         "site" -> mapAsJavaMap(siteCommonData ++ Map("lastPubDateJ" -> lastUpdated)),
         "messages" -> mapAsJavaMap(translationBundle.messages),
         "currentLanguage" -> translationBundle.langCode
