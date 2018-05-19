@@ -195,6 +195,27 @@ you set it to empty string. Then you can use Freemarker conditions to render fee
 
 The same trick can be used for rendering archive pages and sitemaps.
 
+## Markdown content in custom templates
+If you want to generate one of your custom pages (i.e Privacy Policy) from Markdown, simply put necessary files in the `content/misc` directory and make sure your `md` file has at least:
+
+* `title`
+* `type` (must be anything but `post`)
+* `language` (if not provided, the file will be considered to be written in `default` language
+
+Then, assuming that the `title` is indeed `Privacy Policy`, inside of your Freemarker template, reference the content as follows:
+
+```
+<#if misc["Privacy Policy"]??>
+  <#if misc["Privacy Policy"][currentLanguage]??>
+    ${misc["Privacy Policy"][currentLanguage].body}
+  <#else>
+    ${misc["Privacy Policy"][""].body}
+  </#if>
+</#if>
+```
+
+The above code will check whether you Privacy Policy exists in the `currentLanguage` and fall back to using `default`.
+
 ## Copyright and License
 
 Licensed under the MIT License, see the LICENSE file.
