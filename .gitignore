@@ -1,5 +1,8 @@
 npm-debug.log
 .idea
+.bsp
+.metals
+.vscode
 target
 temp/*
 !temp/.gitkeep
