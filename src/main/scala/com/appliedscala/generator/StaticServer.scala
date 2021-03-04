@@ -8,23 +8,22 @@ import org.slf4j.LoggerFactory
   * Created by denis on 9/17/16.
   */
 case class StaticServer(path: String, port: Int, fakeServer: Boolean) {
-  val logger = LoggerFactory.getLogger("S2HttpServer")
-  val server = {
+  private val logger = LoggerFactory.getLogger("S2HttpServer")
+  private val server = {
     if (fakeServer) {
       None
     } else {
       logger.info(s"Starting the HTTP server")
       val jettyServer = new Server(port)
-      val resource_handler = new ResourceHandler()
-      resource_handler.setWelcomeFiles(Array("index.html"))
-      resource_handler.setResourceBase(path)
-      resource_handler.setDirectoriesListed(true)
+      val resourceHandler = new ResourceHandler()
+      resourceHandler.setWelcomeFiles(Array("index.html"))
+      resourceHandler.setResourceBase(path)
+      resourceHandler.setDirectoriesListed(true)
       val handlers = new HandlerList()
-      handlers.setHandlers(Array(resource_handler, new DefaultHandler()))
+      handlers.setHandlers(Array(resourceHandler, new DefaultHandler()))
       jettyServer.setHandler(handlers)
       Some(jettyServer)
     }
-
   }
 
   def start(): Unit = {

@@ -1,32 +1,30 @@
 package com.appliedscala.generator
 
+import better.files
+import better.files.FileMonitor
+import com.vladsch.flexmark.html.HtmlRenderer
+import com.vladsch.flexmark.parser.{Parser, PegdownExtensions}
+import com.vladsch.flexmark.profile.pegdown.PegdownOptionsAdapter
+
 import java.io._
 import java.nio.charset.Charset
-import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file._
-
-import akka.actor.ActorSystem
 import org.apache.commons.cli.{DefaultParser, HelpFormatter, Options}
 import org.apache.commons.io.FileUtils
-import org.pegdown.LinkRenderer.Rendering
-import org.pegdown.ast.ExpLinkNode
 import org.slf4j.LoggerFactory
 import freemarker.template.{Configuration, Template, TemplateExceptionHandler}
-import org.pegdown._
 
 import scala.io.Source
-import scala.util.{Properties, Try}
+import scala.util.{Failure, Success, Try, Using}
 import monix.eval.Task
-import com.beachape.filemanagement.RxMonitor
-import java.nio.file.StandardWatchEventKinds._
+
 import java.text.SimpleDateFormat
 import java.util.Properties
-
 import monix.execution.CancelableFuture
 import org.htmlcleaner.HtmlCleaner
 
-import scala.collection.JavaConversions._
 import scala.collection.mutable.ListBuffer
+import scala.concurrent.ExecutionContext
 
 object GenerationMode extends Enumeration {
   type GenerationMode = Value
@@ -45,7 +43,7 @@ case class Site(title: String, description: String, host: String, lastmod: Strin
 case class HttpServer(port: Int)
 case class S2GenConf(directories: Directories, templates: Templates, site: Site, server: HttpServer)
 
-case class MarkdownProcessor(pegDownProcessor: PegDownProcessor, linkRenderer: LinkRenderer)
+case class MarkdownProcessor(parser: Parser, renderer: HtmlRenderer)
 case class HtmlTemplates(postTemplate: Template, archiveTemplate: Template,
                          indexTemplate: Template,
                          customHtmlTemplates: Seq[CustomHtmlTemplateDescription], customXmlTemplates: Seq[CustomXmlTemplateDescription])
@@ -57,17 +55,17 @@ object SiteGenerator {
   import java.util.{Map => JavaMap}
   import GenerationMode._
 
-  val logger = LoggerFactory.getLogger("S2Generator")
-  val DateFormatter = new SimpleDateFormat("yyyy-MM-dd")
-  val PropertiesSeparator = "~~~~~~"
-  val DefaultConfFile = "s2gen.json"
-  val IndexFilename = "index.html"
+  private val logger = LoggerFactory.getLogger("S2Generator")
+  private val DateFormatter = new SimpleDateFormat("yyyy-MM-dd")
+  private val PropertiesSeparator = "~~~~~~"
+  private val DefaultConfFile = "s2gen.json"
+  private val IndexFilename = "index.html"
 
-  val OptionVersion = "version"
-  val InitOption = "init"
-  val HelpOption = "help"
-  val OnceOption = "once"
-  val NoServerOption = "noserver"
+  private val OptionVersion = "version"
+  private val InitOption = "init"
+  private val HelpOption = "help"
+  private val OnceOption = "once"
+  private val NoServerOption = "noserver"
 
   def main(args: Array[String]): Unit = {
 
@@ -123,7 +121,7 @@ object SiteGenerator {
       } yield result
 
       import monix.execution.Scheduler.Implicits.global
-      resultT.runAsync
+      resultT.runToFuture
     }
 
     val cf = regenerate()
@@ -135,32 +133,23 @@ object SiteGenerator {
       httpServer.start()
 
       logger.info("Registering a file watcher")
-      implicit val actorSystem = ActorSystem.create("actor-world")
 
-      val monitor = RxMonitor()
-      val observable = monitor.observable
-      val subscription = observable.subscribe(
-        onNext = { pathEvent =>
-          logger.info(s"File '${pathEvent.path.getFileName}' has been changed, regenerating")
-          logFutureResult(regenerate())
-        },
-        onError = { exc => logger.error("Exception occurred", exc) },
-        onCompleted = { () => logger.info("Monitor has been shut down") }
-      )
+      def fileChanged(file: files.File, action: String): Unit = {
+        logger.info(s"File '${file.path.getFileName}' has been $action, regenerating")
+        logFutureResult(regenerate())
+      }
+      val monitor = new FileMonitor(contentDirFile, recursive = true) {
+        override def onCreate(file: files.File, count: Int): Unit = fileChanged(file, "created")
+        override def onModify(file: files.File, count: Int): Unit = fileChanged(file, "updated")
+        override def onDelete(file: files.File, count: Int): Unit = fileChanged(file, "deleted")
+        override def onException(exc: Throwable): Unit = logger.error("Exception occurred", exc)
+      }
 
-      Files.walkFileTree(contentDirFile, new SimpleFileVisitor[Path]() {
-        override def preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult = {
-          monitor.registerPath(ENTRY_MODIFY, dir)
-          FileVisitResult.CONTINUE
-        }
-      })
-      monitor.registerPath(ENTRY_MODIFY, Paths.get(templatesDirName))
-
+      monitor.start()(ExecutionContext.global)
       logger.info(s"Waiting for changes...")
       Runtime.getRuntime.addShutdownHook(new Thread() {
         override def run(): Unit = {
           logger.info("Stopping the monitor")
-          monitor.stop()
           httpServer.stop()
         }
       })
@@ -174,10 +163,10 @@ object SiteGenerator {
   }
 
   private def buildTranslations(i18nDirName: Path, siteDir: Path): Seq[TranslationBundle] = {
+    import scala.jdk.CollectionConverters.PropertiesHasAsScala
     val i18nListBuffer = new ListBuffer[TranslationBundle]
     if (Files.isDirectory(i18nDirName)) {
       i18nDirName.toFile.listFiles().map { propertyFile =>
-        import scala.collection.JavaConverters._
         val langCode = propertyFile.getName.split("\\.")(0)
         val prop = new Properties()
         val fileStream = new FileInputStream(propertyFile)
@@ -196,12 +185,9 @@ object SiteGenerator {
 
   private def logFutureResult(cf: CancelableFuture[Seq[Unit]]): Unit = {
     import scala.concurrent.ExecutionContext.Implicits.global
-
-    cf.onSuccess { case _ =>
-      logger.info("Generation finished")
-    }
-    cf.onFailure { case th =>
-      logger.error(s"Exception occurred while running tasks", th)
+    cf.andThen {
+      case Success(_) => logger.info("Generation finished")
+      case Failure(th) => logger.error(s"Exception occurred while running tasks", th)
     }
   }
 
@@ -241,16 +227,6 @@ object SiteGenerator {
     these ++ these.filter(_.isDirectory).flatMap(recursiveListFiles)
   }
 
-  private def createLinkRenderer(siteUrl: String): LinkRenderer = {
-    new LinkRenderer() {
-      override def render(node: ExpLinkNode, text: String): Rendering = {
-        if (!node.url.startsWith("/") && !node.url.contains(siteUrl)) {
-          super.render(node, text).withAttribute("target", "_blank")
-        } else super.render(node, text)
-      }
-    }
-  }
-
   private def createFreemarkerConfig(templateDirName: String): Configuration = {
     val cfg = new Configuration(Configuration.VERSION_2_3_20)
     cfg.setDirectoryForTemplateLoading(new File(templateDirName))
@@ -284,11 +260,12 @@ object SiteGenerator {
           langOutputDir.mkdir()
         }
         val indexOutputFile = new File(langOutputDir, IndexFilename)
-        renderTemplate(indexOutputFile, indexTemplate, mapAsJavaMap(Map(
-          "site" -> mapAsJavaMap(siteCommonData),
-          "messages" -> mapAsJavaMap(langBundle.messages),
+        import scala.jdk.CollectionConverters.MapHasAsJava
+        renderTemplate(indexOutputFile, indexTemplate, (Map(
+          "site" -> siteCommonData.asJava,
+          "messages" -> langBundle.messages.asJava,
           "currentLanguage" -> langBundle.langCode
-        )))
+        )).asJava)
         logger.info(s"Successfully generated: <index> ${langBundle.langCode}")
       }
     }
@@ -312,28 +289,30 @@ object SiteGenerator {
       postType.contains("post")
     }
     val allPosts = publishedPosts.map { post =>
-      mapAsJavaMap(addJavaDate(post))
-    }.sortWith(_("dateJ").asInstanceOf[JavaDate].getTime > _("dateJ").asInstanceOf[JavaDate].getTime)
+      import scala.jdk.CollectionConverters.MapHasAsJava
+      addJavaDate(post).asJava
+    }.sortWith(_.get("dateJ").asInstanceOf[JavaDate].getTime > _.get("dateJ").asInstanceOf[JavaDate].getTime)
+    import scala.jdk.CollectionConverters.MapHasAsJava
     val allMiscPosts = miscArticles.groupBy(_("title")).map { case (key, translations) =>
       val byTr = translations.groupBy{ obj =>
-        obj.get("language").getOrElse("")
+        obj.getOrElse("language", "")
       }.map { case (key2, red) =>
-        (key2, mapAsJavaMap(red.head))
+        (key2, red.head.asJava)
       }
-      (key, mapAsJavaMap(byTr))
+      (key, byTr.asJava)
     }
-    val lastUpdated = allPosts.headOption.map(_("dateJ").asInstanceOf[JavaDate]).getOrElse(new JavaDate())
-    val blogPosts = seqAsJavaList(allPosts)
-    val miscPosts = mapAsJavaMap(allMiscPosts)
-    val inputProps = mapAsJavaMap {
-      Map(
-        "posts" -> blogPosts,
-        "misc" -> miscPosts,
-        "site" -> mapAsJavaMap(siteCommonData ++ Map("lastPubDateJ" -> lastUpdated)),
-        "messages" -> mapAsJavaMap(translationBundle.messages),
-        "currentLanguage" -> translationBundle.langCode
-      )
-    }
+    val lastUpdated = allPosts.headOption.map(_.get("dateJ").asInstanceOf[JavaDate]).getOrElse(new JavaDate())
+    import scala.jdk.CollectionConverters.SeqHasAsJava
+    val blogPosts = allPosts.asJava
+    import scala.jdk.CollectionConverters.MapHasAsJava
+    val miscPosts = allMiscPosts.asJava
+    val inputProps = Map(
+      "posts" -> blogPosts,
+      "misc" -> miscPosts,
+      "site" -> (siteCommonData ++ Map("lastPubDateJ" -> lastUpdated)).asJava,
+      "messages" -> (translationBundle.messages).asJava,
+      "currentLanguage" -> translationBundle.langCode
+    ).asJava
     inputProps
   }
 
@@ -392,7 +371,7 @@ object SiteGenerator {
       Task.sequence(tasks).map(_ => ())
     }
 
-  val PreviewSplitter = """\[\/\/\]\: \# \"__PREVIEW__\""""
+  private val PreviewSplitter = """\[\/\/\]\: \# \"__PREVIEW__\""""
 
   private def extractPreview(contentMd: String): Option[String] = {
     val contentLength = contentMd.length
@@ -408,7 +387,7 @@ object SiteGenerator {
 
   private def processMdFile(mdFile: File, htmlCleaner: HtmlCleaner,
                             mdProcessor: MarkdownProcessor): Map[String, String] = {
-    val postContent = Source.fromFile(mdFile).getLines().toList
+    val postContent = Using.resource(Source.fromFile(mdFile))(_.getLines().toList)
     val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
     val propertiesLines = postContent.take(separatorLineNumber)
     val contentLines = postContent.drop(separatorLineNumber + 1)
@@ -422,8 +401,11 @@ object SiteGenerator {
     }.toMap
     val mdContent = contentLines.mkString("\n")
     val mdPreview = extractPreview(mdContent)
-    val renderedMdContent = mdProcessor.pegDownProcessor.markdownToHtml(mdContent, mdProcessor.linkRenderer)
-    val htmlPreview = mdPreview.map { preview => mdProcessor.pegDownProcessor.markdownToHtml(preview, mdProcessor.linkRenderer) }
+
+    val renderedMdContent = mdProcessor.renderer.render(mdProcessor.parser.parse(mdContent))
+    val htmlPreview = mdPreview.map { preview =>
+      mdProcessor.renderer.render(mdProcessor.parser.parse(preview))
+    }
     val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
 
     val mapBuilder = Map.newBuilder[String, String]
@@ -468,12 +450,13 @@ object SiteGenerator {
           Files.createDirectories(outputDir)
         }
 
-        val input = mapAsJavaMap { Map(
-          "content" -> mapAsJavaMap(addJavaDate(contentObj)),
-          "site" -> mapAsJavaMap(siteCommonData),
-          "messages" -> mapAsJavaMap(langBundle.messages),
+        import scala.jdk.CollectionConverters.MapHasAsJava
+        val input = Map(
+          "content" -> addJavaDate(contentObj).asJava,
+          "site" -> siteCommonData.asJava,
+          "messages" -> langBundle.messages.asJava,
           "currentLanguage" -> langBundle.langCode
-        ) }
+        ).asJava
         val outputFile = new File(outputDir.toFile, outputFilename)
         renderTemplate(outputFile, template, input)
         logger.info(s"Successfully generated: $sourceFilename ${langBundle.langCode}")
@@ -489,13 +472,6 @@ object SiteGenerator {
     } finally {
       fileWriter.close()
     }
-  }
-
-  private def runTasks(tasks: Seq[Task[Unit]]): CancelableFuture[Seq[Unit]] = {
-    import monix.execution.Scheduler.Implicits.global
-
-    val resultT = Task.sequence(tasks)
-    resultT.runAsync
   }
 
   private def getOutputPaths(s2conf: S2GenConf): OutputPaths = {
@@ -522,16 +498,18 @@ object SiteGenerator {
   }
 
   private def createMarkdownProcessor(host: String): MarkdownProcessor = {
-    val pgPluginsCode = Extensions.TABLES | Extensions.FENCED_CODE_BLOCKS
-    val mdGenerator = new PegDownProcessor(pgPluginsCode)
-    val linkRenderer = createLinkRenderer(host)
-    MarkdownProcessor(mdGenerator, linkRenderer)
+    val linkRendererExtension = new TargetBlankLinkRendererExtension(host)
+    val options = PegdownOptionsAdapter.flexmarkOptions(
+      PegdownExtensions.TABLES | PegdownExtensions.FENCED_CODE_BLOCKS, linkRendererExtension)
+    val parser = Parser.builder(options).build()
+    val renderer = HtmlRenderer.builder(options).build()
+    MarkdownProcessor(parser, renderer)
   }
 
   private def parseConfigOrExit(confFileName: String): S2GenConf = {
 
-    if (!Files.exists(Paths.get(DefaultConfFile))) {
-      System.err.println(s"Cannot find a configuration file $DefaultConfFile")
+    if (!Files.exists(Paths.get(confFileName))) {
+      System.err.println(s"Cannot find a configuration file $confFileName")
       System.exit(-1)
     }
 
@@ -539,15 +517,16 @@ object SiteGenerator {
     import io.circe.generic.auto._
     import scala.io.Source
 
-    val confStr = Source.fromFile(DefaultConfFile).getLines().mkString("")
+    val confStr = Using.resource(Source.fromFile(confFileName))(_.getLines().mkString(""))
     val s2confE = decode[S2GenConf](confStr)
 
-    s2confE.recover { case error =>
-      logger.error("Error occurred while parsing the configuration file: ", error)
-      System.exit(-1)
+    s2confE match {
+      case Left(error) =>
+        logger.error("Error occurred while parsing the configuration file: ", error.getCause)
+        System.exit(-1)
+        throw error.getCause
+      case Right(value) => value
     }
-
-    s2confE.toOption.get
   }
 
   private def parseCommandLineArgs(args: Array[String]): GenerationMode = {

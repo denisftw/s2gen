@@ -14,6 +14,8 @@ declare -r app_home="$(realpath "$(dirname "$real_script_path")")"
 
 declare -r lib_dir="$EXEC_LOC/../lib"
 
+declare -r app_mainclass="com.appliedscala.generator.SiteGenerator"
+
 ${{template_declares}}
 
 exec java -cp $app_classpath $app_mainclass $@
