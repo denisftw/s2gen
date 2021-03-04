@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory
 import freemarker.template.{Configuration, Template, TemplateExceptionHandler}
 
 import scala.io.Source
-import scala.util.{Failure, Success, Try}
+import scala.util.{Failure, Success, Try, Using}
 import monix.eval.Task
 
 import java.text.SimpleDateFormat
@@ -55,17 +55,17 @@ object SiteGenerator {
   import java.util.{Map => JavaMap}
   import GenerationMode._
 
-  val logger = LoggerFactory.getLogger("S2Generator")
-  val DateFormatter = new SimpleDateFormat("yyyy-MM-dd")
-  val PropertiesSeparator = "~~~~~~"
-  val DefaultConfFile = "s2gen.json"
-  val IndexFilename = "index.html"
+  private val logger = LoggerFactory.getLogger("S2Generator")
+  private val DateFormatter = new SimpleDateFormat("yyyy-MM-dd")
+  private val PropertiesSeparator = "~~~~~~"
+  private val DefaultConfFile = "s2gen.json"
+  private val IndexFilename = "index.html"
 
-  val OptionVersion = "version"
-  val InitOption = "init"
-  val HelpOption = "help"
-  val OnceOption = "once"
-  val NoServerOption = "noserver"
+  private val OptionVersion = "version"
+  private val InitOption = "init"
+  private val HelpOption = "help"
+  private val OnceOption = "once"
+  private val NoServerOption = "noserver"
 
   def main(args: Array[String]): Unit = {
 
@@ -150,7 +150,6 @@ object SiteGenerator {
       Runtime.getRuntime.addShutdownHook(new Thread() {
         override def run(): Unit = {
           logger.info("Stopping the monitor")
-//          monitor.close()
           httpServer.stop()
         }
       })
@@ -372,7 +371,7 @@ object SiteGenerator {
       Task.sequence(tasks).map(_ => ())
     }
 
-  val PreviewSplitter = """\[\/\/\]\: \# \"__PREVIEW__\""""
+  private val PreviewSplitter = """\[\/\/\]\: \# \"__PREVIEW__\""""
 
   private def extractPreview(contentMd: String): Option[String] = {
     val contentLength = contentMd.length
@@ -388,7 +387,7 @@ object SiteGenerator {
 
   private def processMdFile(mdFile: File, htmlCleaner: HtmlCleaner,
                             mdProcessor: MarkdownProcessor): Map[String, String] = {
-    val postContent = Source.fromFile(mdFile).getLines().toList
+    val postContent = Using.resource(Source.fromFile(mdFile))(_.getLines().toList)
     val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
     val propertiesLines = postContent.take(separatorLineNumber)
     val contentLines = postContent.drop(separatorLineNumber + 1)
@@ -518,7 +517,7 @@ object SiteGenerator {
     import io.circe.generic.auto._
     import scala.io.Source
 
-    val confStr = Source.fromFile(confFileName).getLines().mkString("")
+    val confStr = Using.resource(Source.fromFile(confFileName))(_.getLines().mkString(""))
     val s2confE = decode[S2GenConf](confStr)
 
     s2confE match {

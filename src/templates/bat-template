@@ -3,6 +3,8 @@
 if "%@@APP_ENV_NAME@@_HOME%"=="" set "@@APP_ENV_NAME@@_HOME=%~dp0\\.."
 set "APP_LIB_DIR=%@@APP_ENV_NAME@@_HOME%\lib\"
 
+set APP_MAIN_CLASS=com.appliedscala.generator.SiteGenerator
+
 @@APP_DEFINES@@
 
 java -cp "%APP_CLASSPATH%" %APP_MAIN_CLASS% %*
