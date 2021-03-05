@@ -2,6 +2,11 @@ package com.appliedscala.generator
 
 import better.files
 import better.files.FileMonitor
+import com.appliedscala.generator.configuration.S2GenConf
+import com.appliedscala.generator.errors.ConfigurationParsingException
+import com.appliedscala.generator.extensions.TargetBlankLinkRendererExtension
+import com.appliedscala.generator.model._
+import com.appliedscala.generator.services.{CommandLineService, HttpServerService, InitService}
 import com.vladsch.flexmark.html.HtmlRenderer
 import com.vladsch.flexmark.parser.{Parser, PegdownExtensions}
 import com.vladsch.flexmark.profile.pegdown.PegdownOptionsAdapter
@@ -9,51 +14,27 @@ import com.vladsch.flexmark.profile.pegdown.PegdownOptionsAdapter
 import java.io._
 import java.nio.charset.Charset
 import java.nio.file._
-import org.apache.commons.cli.{DefaultParser, HelpFormatter, Options}
 import org.apache.commons.io.FileUtils
 import org.slf4j.LoggerFactory
 import freemarker.template.{Configuration, Template, TemplateExceptionHandler}
 
 import scala.io.Source
-import scala.util.{Failure, Success, Try, Using}
+import scala.util.{Failure, Success, Using}
 import monix.eval.Task
 
 import java.text.SimpleDateFormat
 import java.util.Properties
 import monix.execution.CancelableFuture
 import org.htmlcleaner.HtmlCleaner
+import play.api.libs.json.{JsError, JsSuccess, Json}
 
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.ExecutionContext
-
-object GenerationMode extends Enumeration {
-  type GenerationMode = Value
-  val Once = Value("Once")
-  val Monitor = Value("Monitor")
-  val MonitorNoServer = Value("MonitorNoServer")
-}
-
-case class CustomHtmlTemplateDescription(name: String, template: Template)
-case class CustomXmlTemplateDescription(name: String, template: Template)
-
-case class Directories(basedir: String, content: String, output: String, archive: String, templates: String)
-case class Templates(post: String, archive: String, index: String, custom: Seq[String], customXml: Seq[String])
-case class TranslationBundle(langCode: String, messages: Map[String, Object], siteDir: Path)
-case class Site(title: String, description: String, host: String, lastmod: String)
-case class HttpServer(port: Int)
-case class S2GenConf(directories: Directories, templates: Templates, site: Site, server: HttpServer)
-
-case class MarkdownProcessor(parser: Parser, renderer: HtmlRenderer)
-case class HtmlTemplates(postTemplate: Template, archiveTemplate: Template,
-                         indexTemplate: Template,
-                         customHtmlTemplates: Seq[CustomHtmlTemplateDescription], customXmlTemplates: Seq[CustomXmlTemplateDescription])
-case class OutputPaths(archiveOutput: String, indexOutputDir: Path, siteDir: Path)
 
 object SiteGenerator {
 
   import java.util.{Date => JavaDate}
   import java.util.{Map => JavaMap}
-  import GenerationMode._
 
   private val logger = LoggerFactory.getLogger("S2Generator")
   private val DateFormatter = new SimpleDateFormat("yyyy-MM-dd")
@@ -61,15 +42,15 @@ object SiteGenerator {
   private val DefaultConfFile = "s2gen.json"
   private val IndexFilename = "index.html"
 
-  private val OptionVersion = "version"
-  private val InitOption = "init"
-  private val HelpOption = "help"
-  private val OnceOption = "once"
-  private val NoServerOption = "noserver"
-
   def main(args: Array[String]): Unit = {
 
-    val generationMode = parseCommandLineArgs(args)
+    val initService = new InitService
+    val commandLineService = new CommandLineService(initService)
+    val generationMode = commandLineService.parseCommandLineArgs(args) match {
+      case Left(_)      => System.exit(0)
+      case Right(value) => value
+    }
+    val httpServerService = new HttpServerService
     val s2conf = parseConfigOrExit(DefaultConfFile)
 
     val contentDirFile = Paths.get(s2conf.directories.basedir, s2conf.directories.content)
@@ -112,8 +93,8 @@ object SiteGenerator {
         postData <- mdProcessingJob
         archiveJob = generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput,
           htmlTemplates.archiveTemplate, translations)
-        indexJob = generateIndexPage(siteCommonData, outputPaths.indexOutputDir,
-          htmlTemplates.indexTemplate, translations)
+        indexJob = generateIndexPage(siteCommonData, outputPaths.indexOutputDir, htmlTemplates.indexTemplate,
+          translations)
         customPageJobs = generateCustomPages(siteCommonData, postData, outputPaths.indexOutputDir,
           htmlTemplates.customHtmlTemplates, htmlTemplates.customXmlTemplates, translations)
         postJobs = generatePostPages(postData, siteCommonData, outputPaths, htmlTemplates, translations)
@@ -128,12 +109,16 @@ object SiteGenerator {
     logFutureResult(cf)
 
     if (generationMode != GenerationMode.Once) {
-      val httpServer = StaticServer(outputPaths.siteDir.toString, s2conf.server.port,
-        generationMode == GenerationMode.MonitorNoServer)
-      httpServer.start()
+      val maybeServer = if (generationMode != GenerationMode.MonitorNoServer) {
+        httpServerService.start(outputPaths.siteDir.toString, s2conf.server.port) match {
+          case Left(th) =>
+            logger.warn(s"Cannot start HTTP server on port ${s2conf.server.port}", th)
+            None
+          case Right(value) => Some(value)
+        }
+      } else None
 
       logger.info("Registering a file watcher")
-
       def fileChanged(file: files.File, action: String): Unit = {
         logger.info(s"File '${file.path.getFileName}' has been $action, regenerating")
         logFutureResult(regenerate())
@@ -150,7 +135,7 @@ object SiteGenerator {
       Runtime.getRuntime.addShutdownHook(new Thread() {
         override def run(): Unit = {
           logger.info("Stopping the monitor")
-          httpServer.stop()
+          httpServerService.stop(maybeServer)
         }
       })
     } else {
@@ -180,45 +165,15 @@ object SiteGenerator {
       }
     }
     val result = i18nListBuffer.result()
-    if (result.isEmpty) Seq(TranslationBundle("", Map.empty[String, Object], new File(siteDir.toFile, "").toPath)) else result
+    if (result.isEmpty) Seq(TranslationBundle("", Map.empty[String, Object], new File(siteDir.toFile, "").toPath))
+    else result
   }
 
   private def logFutureResult(cf: CancelableFuture[Seq[Unit]]): Unit = {
     import scala.concurrent.ExecutionContext.Implicits.global
     cf.andThen {
-      case Success(_) => logger.info("Generation finished")
+      case Success(_)  => logger.info("Generation finished")
       case Failure(th) => logger.error(s"Exception occurred while running tasks", th)
-    }
-  }
-
-  private def initProjectStructure(): Unit = {
-    println("Initializing...")
-    val classLoader = this.getClass.getClassLoader
-    copyFromClasspath(classLoader, "init/site/css/styles.css", "site/css", "styles.css")
-    copyFromClasspath(classLoader, "init/s2gen.json", ".", "s2gen.json")
-    copyFromClasspath(classLoader, "init/content/hello-world.md", "content/blog/2016", "hello-world.md")
-    val templateNames = Seq("archive.ftl", "blog.ftl", "footer.ftl" , "header.ftl", "index.ftl",
-      "main.ftl", "menu.ftl", "page.ftl", "post.ftl", "sitemap.ftl", "about.ftl", "info.ftl", "feed.ftl")
-    templateNames.foreach { templateName =>
-      copyFromClasspath(classLoader, s"init/templates/$templateName", "templates", templateName)
-    }
-    println(s"The skeleton project has been generated. Now you can type s2gen to generate HTML files")
-  }
-
-  private def copyFromClasspath(classLoader: ClassLoader, cpPath: String,
-                      destinationDir: String, destinationFilename: String): Unit = {
-    val source = Source.fromInputStream(classLoader.getResourceAsStream(cpPath), "UTF-8")
-    val destinationPath = Paths.get(destinationDir)
-    if (Files.notExists(destinationPath)) {
-      Files.createDirectories(destinationPath)
-    }
-    val pw = new PrintWriter(new File(destinationDir, destinationFilename))
-    try {
-      source.foreach( char => pw.print(char) )
-    } catch {
-      case e: Exception => logger.error("Exception occurred while initializing the project", e)
-    } finally {
-      pw.close()
     }
   }
 
@@ -235,8 +190,8 @@ object SiteGenerator {
     cfg
   }
 
-  private def generatePostPages(postData: Seq[Map[String, String]], siteCommonData: Map[String, Object], outputPaths: OutputPaths,
-                                htmlTemplates: HtmlTemplates, translations: Seq[TranslationBundle]): Seq[Task[Unit]] = {
+  private def generatePostPages(postData: Seq[Map[String, String]], siteCommonData: Map[String, Object],
+      outputPaths: OutputPaths, htmlTemplates: HtmlTemplates, translations: Seq[TranslationBundle]): Seq[Task[Unit]] = {
     translations.flatMap { langBundle =>
       val langOutputDir = langBundle.siteDir.toFile
       if (!langOutputDir.exists()) {
@@ -245,14 +200,14 @@ object SiteGenerator {
       postData.filter { obj =>
         obj.get("type").contains("post")
       } map { contentObj =>
-        generateSingleBlogFile(siteCommonData, contentObj, langOutputDir.toString,
-          htmlTemplates.postTemplate, langBundle)
+        generateSingleBlogFile(siteCommonData, contentObj, langOutputDir.toString, htmlTemplates.postTemplate,
+          langBundle)
       }
     }
   }
 
-  private def generateIndexPage(siteCommonData: Map[String, Object], indexOutputDir: Path,
-                  indexTemplate: Template, translations: Seq[TranslationBundle]): Task[Unit] = {
+  private def generateIndexPage(siteCommonData: Map[String, Object], indexOutputDir: Path, indexTemplate: Template,
+      translations: Seq[TranslationBundle]): Task[Unit] = {
     val task = Task.delay {
       translations.foreach { langBundle =>
         val langOutputDir = langBundle.siteDir.toFile
@@ -261,11 +216,15 @@ object SiteGenerator {
         }
         val indexOutputFile = new File(langOutputDir, IndexFilename)
         import scala.jdk.CollectionConverters.MapHasAsJava
-        renderTemplate(indexOutputFile, indexTemplate, (Map(
-          "site" -> siteCommonData.asJava,
-          "messages" -> langBundle.messages.asJava,
-          "currentLanguage" -> langBundle.langCode
-        )).asJava)
+        renderTemplate(
+          indexOutputFile,
+          indexTemplate,
+          Map(
+            "site" -> siteCommonData.asJava,
+            "messages" -> langBundle.messages.asJava,
+            "currentLanguage" -> langBundle.langCode
+          ).asJava
+        )
         logger.info(s"Successfully generated: <index> ${langBundle.langCode}")
       }
     }
@@ -279,47 +238,53 @@ object SiteGenerator {
   }
 
   private def buildInputProps(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
-                              translationBundle: TranslationBundle):
-  Task[JavaMap[String, Object]] = Task.delay {
-    val (publishedPosts, miscArticles)= postData.filter { post =>
-      val postStatus = post.get("status")
-      postStatus.contains("published")
-    }.partition { post =>
-      val postType = post.get("type")
-      postType.contains("post")
-    }
-    val allPosts = publishedPosts.map { post =>
+      translationBundle: TranslationBundle): Task[JavaMap[String, Object]] =
+    Task.delay {
+      val (publishedPosts, miscArticles) = postData
+        .filter { post =>
+          val postStatus = post.get("status")
+          postStatus.contains("published")
+        }
+        .partition { post =>
+          val postType = post.get("type")
+          postType.contains("post")
+        }
+      val allPosts = publishedPosts
+        .map { post =>
+          import scala.jdk.CollectionConverters.MapHasAsJava
+          addJavaDate(post).asJava
+        }
+        .sortWith(_.get("dateJ").asInstanceOf[JavaDate].getTime > _.get("dateJ").asInstanceOf[JavaDate].getTime)
       import scala.jdk.CollectionConverters.MapHasAsJava
-      addJavaDate(post).asJava
-    }.sortWith(_.get("dateJ").asInstanceOf[JavaDate].getTime > _.get("dateJ").asInstanceOf[JavaDate].getTime)
-    import scala.jdk.CollectionConverters.MapHasAsJava
-    val allMiscPosts = miscArticles.groupBy(_("title")).map { case (key, translations) =>
-      val byTr = translations.groupBy{ obj =>
-        obj.getOrElse("language", "")
-      }.map { case (key2, red) =>
-        (key2, red.head.asJava)
+      val allMiscPosts = miscArticles.groupBy(_("title")).map { case (key, translations) =>
+        val byTr = translations
+          .groupBy { obj =>
+            obj.getOrElse("language", "")
+          }
+          .map { case (key2, red) =>
+            (key2, red.head.asJava)
+          }
+        (key, byTr.asJava)
       }
-      (key, byTr.asJava)
+      val lastUpdated = allPosts.headOption.map(_.get("dateJ").asInstanceOf[JavaDate]).getOrElse(new JavaDate())
+      import scala.jdk.CollectionConverters.SeqHasAsJava
+      val blogPosts = allPosts.asJava
+      import scala.jdk.CollectionConverters.MapHasAsJava
+      val miscPosts = allMiscPosts.asJava
+      val inputProps = Map(
+        "posts" -> blogPosts,
+        "misc" -> miscPosts,
+        "site" -> (siteCommonData ++ Map("lastPubDateJ" -> lastUpdated)).asJava,
+        "messages" -> (translationBundle.messages).asJava,
+        "currentLanguage" -> translationBundle.langCode
+      ).asJava
+      inputProps
     }
-    val lastUpdated = allPosts.headOption.map(_.get("dateJ").asInstanceOf[JavaDate]).getOrElse(new JavaDate())
-    import scala.jdk.CollectionConverters.SeqHasAsJava
-    val blogPosts = allPosts.asJava
-    import scala.jdk.CollectionConverters.MapHasAsJava
-    val miscPosts = allMiscPosts.asJava
-    val inputProps = Map(
-      "posts" -> blogPosts,
-      "misc" -> miscPosts,
-      "site" -> (siteCommonData ++ Map("lastPubDateJ" -> lastUpdated)).asJava,
-      "messages" -> (translationBundle.messages).asJava,
-      "currentLanguage" -> translationBundle.langCode
-    ).asJava
-    inputProps
-  }
 
-  private def generateCustomPages(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]], indexOutputDir: Path,
-    customTemplateGens: Seq[CustomHtmlTemplateDescription], customXmlTemplateDescriptions: Seq[CustomXmlTemplateDescription],
-                                  translations: Seq[TranslationBundle]):
-    Seq[Task[Unit]] = {
+  private def generateCustomPages(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
+      indexOutputDir: Path, customTemplateGens: Seq[CustomHtmlTemplateDescription],
+      customXmlTemplateDescriptions: Seq[CustomXmlTemplateDescription], translations: Seq[TranslationBundle])
+      : Seq[Task[Unit]] = {
 
     val tasks = translations.map { translationBundle =>
       val taskInputProps = buildInputProps(siteCommonData, postData, translationBundle)
@@ -353,23 +318,23 @@ object SiteGenerator {
   }
 
   private def generateArchivePage(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
-            archiveOutput: String, archiveTemplate: Template, translations: Seq[TranslationBundle]): Task[Unit] = {
+      archiveOutput: String, archiveTemplate: Template, translations: Seq[TranslationBundle]): Task[Unit] = {
 
-      val tasks = translations.map { langBundle =>
-        val inputPropsTask = buildInputProps(siteCommonData, postData, langBundle)
-        val task = inputPropsTask.map { inputProps =>
-          val langOutputDir = new File(langBundle.siteDir.toFile, archiveOutput)
-          if (!langOutputDir.exists()) {
-            langOutputDir.mkdirs()
-          }
-          val archiveOutputFile = new File(langOutputDir, "index.html")
-          renderTemplate(archiveOutputFile, archiveTemplate, inputProps)
-          logger.info(s"Successfully generated: <archive> ${langBundle.langCode}")
+    val tasks = translations.map { langBundle =>
+      val inputPropsTask = buildInputProps(siteCommonData, postData, langBundle)
+      val task = inputPropsTask.map { inputProps =>
+        val langOutputDir = new File(langBundle.siteDir.toFile, archiveOutput)
+        if (!langOutputDir.exists()) {
+          langOutputDir.mkdirs()
         }
-        task
+        val archiveOutputFile = new File(langOutputDir, "index.html")
+        renderTemplate(archiveOutputFile, archiveTemplate, inputProps)
+        logger.info(s"Successfully generated: <archive> ${langBundle.langCode}")
       }
-      Task.sequence(tasks).map(_ => ())
+      task
     }
+    Task.sequence(tasks).map(_ => ())
+  }
 
   private val PreviewSplitter = """\[\/\/\]\: \# \"__PREVIEW__\""""
 
@@ -385,8 +350,8 @@ object SiteGenerator {
     }
   }
 
-  private def processMdFile(mdFile: File, htmlCleaner: HtmlCleaner,
-                            mdProcessor: MarkdownProcessor): Map[String, String] = {
+  private def processMdFile(
+      mdFile: File, htmlCleaner: HtmlCleaner, mdProcessor: MarkdownProcessor): Map[String, String] = {
     val postContent = Using.resource(Source.fromFile(mdFile))(_.getLines().toList)
     val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
     val propertiesLines = postContent.take(separatorLineNumber)
@@ -395,8 +360,8 @@ object SiteGenerator {
     val contentPropertyMap = propertiesLines.flatMap { propertyLine =>
       val pair = propertyLine.split("=")
       pair match {
-        case Array(first, second) => Some(pair(0) -> pair(1))
-        case _ => None
+        case Array(first, second) => Some(first -> second)
+        case _                    => None
       }
     }.toMap
     val mdContent = contentLines.mkString("\n")
@@ -426,15 +391,17 @@ object SiteGenerator {
   }
 
   private def generateSingleBlogFile(siteCommonData: Map[String, Object], contentObj: Map[String, String],
-                                globalOutputDir: String, template: Template, langBundle: TranslationBundle): Task[Unit] = {
+      globalOutputDir: String, template: Template, langBundle: TranslationBundle): Task[Unit] = {
     val sourceFilename = contentObj("sourceFilename")
     val task = Task {
-      val outputLink = contentObj.getOrElse("link", throw new Exception(
-        s"The required link property is not specified for $sourceFilename"))
+      val outputLink = contentObj.getOrElse("link",
+        throw new Exception(s"The required link property is not specified for $sourceFilename"))
 
       val maybeLanguage = contentObj.get("language")
-      if ((maybeLanguage.isDefined && maybeLanguage.contains(langBundle.langCode)) ||
-          (maybeLanguage.isEmpty && langBundle.langCode.length == 0)) {
+      if (
+        (maybeLanguage.isDefined && maybeLanguage.contains(langBundle.langCode)) ||
+        (maybeLanguage.isEmpty && langBundle.langCode.length == 0)
+      ) {
         val linkLastPart = outputLink.split("/").last
         val (outputDir, outputFilename) = if (linkLastPart.endsWith(".html")) {
           val localOutputDir = Paths.get(globalOutputDir, Paths.get(outputLink).getParent.toString)
@@ -499,8 +466,8 @@ object SiteGenerator {
 
   private def createMarkdownProcessor(host: String): MarkdownProcessor = {
     val linkRendererExtension = new TargetBlankLinkRendererExtension(host)
-    val options = PegdownOptionsAdapter.flexmarkOptions(
-      PegdownExtensions.TABLES | PegdownExtensions.FENCED_CODE_BLOCKS, linkRendererExtension)
+    val pegdownExtensions = PegdownExtensions.TABLES | PegdownExtensions.FENCED_CODE_BLOCKS
+    val options = PegdownOptionsAdapter.flexmarkOptions(pegdownExtensions, linkRendererExtension)
     val parser = Parser.builder(options).build()
     val renderer = HtmlRenderer.builder(options).build()
     MarkdownProcessor(parser, renderer)
@@ -513,54 +480,15 @@ object SiteGenerator {
       System.exit(-1)
     }
 
-    import io.circe.jawn._
-    import io.circe.generic.auto._
-    import scala.io.Source
-
     val confStr = Using.resource(Source.fromFile(confFileName))(_.getLines().mkString(""))
-    val s2confE = decode[S2GenConf](confStr)
-
-    s2confE match {
-      case Left(error) =>
-        logger.error("Error occurred while parsing the configuration file: ", error.getCause)
+    Json.parse(confStr).validate[S2GenConf] match {
+      case JsSuccess(value, _) => value
+      case error: JsError =>
+        val errorMessage = JsError.Message.unapply(error).getOrElse("unknown error")
+        val exception = new ConfigurationParsingException(errorMessage)
+        logger.error("Error occurred while parsing the configuration file", exception)
         System.exit(-1)
-        throw error.getCause
-      case Right(value) => value
-    }
-  }
-
-  private def parseCommandLineArgs(args: Array[String]): GenerationMode = {
-    val options = new Options
-    options.addOption(OptionVersion, false, "print the version information")
-    options.addOption(InitOption, false, "initialize project structure and exit")
-    options.addOption(OnceOption, false, "generate the site once and exits without starting the monitoring")
-    options.addOption(HelpOption, false, "print this message")
-    options.addOption(NoServerOption, false, "start monitoring without the embedded server")
-    val helpFormatter = new HelpFormatter
-    val parser = new DefaultParser
-    val cmd = parser.parse(options, args)
-
-    if (cmd.hasOption(OptionVersion)) {
-      val versionNumberT = Try { CustomHtmlTemplateDescription.getClass.getPackage.getImplementationVersion }
-      val versionNumber = versionNumberT.getOrElse("[dev]")
-      println(s"""s2gen version $versionNumber""")
-      System.exit(0)
-    } else if (cmd.hasOption(InitOption)) {
-      initProjectStructure()
-      System.exit(0)
-    } else if (cmd.hasOption(HelpOption)) {
-      helpFormatter.printHelp("s2gen", options)
-      System.exit(0)
-    }
-
-    if (cmd.hasOption(OnceOption)) {
-      GenerationMode.Once
-    } else {
-      if (cmd.hasOption(NoServerOption)) {
-        GenerationMode.MonitorNoServer
-      } else {
-        GenerationMode.Monitor
-      }
+        throw exception
     }
   }
 }

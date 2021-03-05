@@ -1,4 +1,4 @@
-package com.appliedscala.generator
+package com.appliedscala.generator.extensions
 
 import com.vladsch.flexmark.ast.Link
 import com.vladsch.flexmark.html.HtmlRenderer
@@ -13,7 +13,8 @@ class TargetBlankLinkRendererExtension(siteUrl: String) extends HtmlRenderer.Htm
   class TargetBlankLinkRenderer extends NodeRenderer {
     override def getNodeRenderingHandlers: util.Set[NodeRenderingHandler[_]] = {
       val set = new util.HashSet[NodeRenderingHandler[_]]()
-      val linkHandler = new NodeRenderingHandler[Link](classOf[Link], (node, context, writer) => {
+      val linkHandler = new NodeRenderingHandler[Link](classOf[Link],
+        (node, context, writer) => {
         if (!node.getUrl.startsWith("/") && !node.getUrl.containsAllOf(BasedSequence.of(siteUrl))) {
           val attributes = new MutableAttributes()
           attributes.addValue("target", "_blank")
