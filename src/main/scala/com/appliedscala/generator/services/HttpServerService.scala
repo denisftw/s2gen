@@ -1,6 +1,6 @@
 package com.appliedscala.generator.services
 
-import com.appliedscala.generator.errors.{HttpServerStartException, HttpServerStopError}
+import com.appliedscala.generator.errors.{HttpServerStartError, HttpServerStopError}
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.handler.{DefaultHandler, HandlerList, ResourceHandler}
 import org.slf4j.LoggerFactory
@@ -23,14 +23,14 @@ case class HttpServerService() {
     jettyServer
   }
 
-  def start(path: String, port: Int): Either[HttpServerStartException, Server] = {
+  def start(path: String, port: Int): Either[HttpServerStartError, Server] = {
     try {
       val server = createServer(path, port)
       server.start()
       logger.info(s"The HTTP server has been started on port $port")
       Right(server)
     } catch {
-      case th: Throwable => Left(HttpServerStartException(th))
+      case th: Throwable => Left(HttpServerStartError(th))
     }
   }
 

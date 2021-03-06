@@ -4,13 +4,12 @@ version := "0.3.4"
 
 scalaVersion := "2.13.5"
 
-scalacOptions += "-target:jvm-1.8"
+scalacOptions := Seq("-target:jvm-1.8", "-unchecked", "-deprecation")
 
-val circeVersion = "0.12.3"
-val monixVersion = "3.3.0"
 val flexmarkVersion = "0.62.2"
 
 libraryDependencies ++= Seq(
+  "com.github.yakivy" %% "jam-core" % "0.0.2" % Provided,
   "com.vladsch.flexmark" % "flexmark-ext-tables" % flexmarkVersion,
   "com.vladsch.flexmark" % "flexmark-profile-pegdown" % flexmarkVersion,
   "org.freemarker" % "freemarker" % "2.3.31",
@@ -21,7 +20,8 @@ libraryDependencies ++= Seq(
   "commons-cli" % "commons-cli" % "1.3.1",
   "com.beachape" %% "enumeratum" % "1.6.1",
   "com.typesafe.play" %% "play-json" % "2.9.2",
-  "io.monix" %% "monix" % monixVersion,
+  "dev.zio" %% "zio" % "1.0.4-2",
+  "io.monix" %% "monix" % "3.3.0",
   "org.eclipse.jetty" % "jetty-server" % "9.4.38.v20210224",
   "net.sourceforge.htmlcleaner" % "htmlcleaner" % "2.24"
 )
