@@ -8,7 +8,7 @@ import com.appliedscala.generator.model.{
   TranslationBundle
 }
 import freemarker.template.Template
-import monix.eval.Task
+import zio.{ZIO, Task}
 import org.slf4j.LoggerFactory
 
 import java.io.{File, FileWriter}
@@ -38,7 +38,7 @@ class PageGenerationService {
       }
       task
     }
-    Task.sequence(tasks).map(_ => ())
+    Task.collectAll(tasks).map(_ => ())
   }
 
   def generateCustomPages(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]], indexOutputDir: Path,
@@ -72,14 +72,15 @@ class PageGenerationService {
         }
       }
 
-      Task.sequence(htmlPart ++ xmlPart).map(_ => ())
+      val allTasks: Seq[Task[Unit]] = htmlPart ++ xmlPart
+      Task.collectAll(allTasks).map(_ => ())
     }
     tasks
   }
 
   def generateIndexPage(siteCommonData: Map[String, Object], indexOutputDir: Path, indexTemplate: Template,
       translations: Seq[TranslationBundle]): Task[Unit] = {
-    val task = Task.delay {
+    val task = Task {
       translations.foreach { langBundle =>
         val langOutputDir = langBundle.siteDir.toFile
         if (!langOutputDir.exists()) {
@@ -177,7 +178,7 @@ class PageGenerationService {
 
   private def buildInputProps(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
       translationBundle: TranslationBundle): Task[JavaMap[String, Object]] =
-    Task.delay {
+    Task {
       val (publishedPosts, miscArticles) = postData
         .filter { post =>
           val postStatus = post.get("status")

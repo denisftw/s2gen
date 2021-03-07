@@ -3,17 +3,25 @@ package com.appliedscala.generator.services
 import better.files
 import better.files.FileMonitor
 import com.appliedscala.generator.configuration.ApplicationConfiguration
-import com.appliedscala.generator.errors.{ApplicationError, GenerationError, SystemError, UserError}
+import com.appliedscala.generator.errors.{
+  ApplicationError,
+  FileMonitorStartError,
+  HttpServerStartError,
+  RegenerationError,
+  ShutdownHookRegistrationError,
+  SystemError,
+  UserError
+}
 import com.appliedscala.generator.model._
-import monix.eval.Task
-import monix.execution.CancelableFuture
 import org.apache.commons.io.FileUtils
+import org.eclipse.jetty.server.Server
 import org.htmlcleaner.HtmlCleaner
 import org.slf4j.LoggerFactory
-import zio.{ExitCode, IO, Task => ZTask}
+import zio.{ExitCode, IO, Task, UIO, URIO, ZEnv}
 
 import java.io._
 import java.nio.file._
+import scala.collection.compat.immutable.ArraySeq
 import scala.concurrent.ExecutionContext
 import scala.util.{Failure, Success}
 
@@ -26,33 +34,29 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
 
   private val logger = LoggerFactory.getLogger(this.getClass)
 
-  def runZ(args: Array[String]): ZTask[Unit] = {
+  def runZ(args: List[String]): URIO[ZEnv, ExitCode] = {
     commandLineService
-      .parseCommandLineArgsZ(args)
-      .flatMap(extractGenerationMode)
-      .foldM(handleGenerationError, handleExitCode)
+      .parseCommandLineArgsZ(args.toArray)
+      .flatMap(generateIfRequired)
+      .fold(handleApplicationError, identity)
   }
 
-  private def handleExitCode(exitCode: ExitCode): ZTask[Unit] = ZTask.succeed {
-    System.exit(exitCode.code)
-  }
-
-  private def handleGenerationError(error: ApplicationError): ZTask[Unit] = ZTask.succeed {
+  private def handleApplicationError(error: ApplicationError): ExitCode = {
     error match {
       case userError: UserError     => println(userError.message)
       case systemError: SystemError => logger.error("Exception occurred", systemError.cause)
     }
-    System.exit(ExitCode.failure.code)
+    ExitCode.failure
   }
 
-  private def extractGenerationMode(parsed: Either[Unit, GenerationMode]): IO[GenerationError, ExitCode] = {
+  private def generateIfRequired(parsed: Either[Unit, GenerationMode]): IO[ApplicationError, ExitCode] = {
     parsed match {
       case Left(_)     => IO.succeed(ExitCode.success)
-      case Right(mode) => generate(mode)
+      case Right(mode) => generate(mode).map(_ => ExitCode.success)
     }
   }
 
-  private def generate(generationMode: GenerationMode): IO[GenerationError, ExitCode] = IO.succeed {
+  private def generate(generationMode: GenerationMode): IO[ApplicationError, Unit] = IO.effectSuspendTotal {
     configurationReadingService.readConfiguration().flatMap { conf =>
       val contentDirFile = Paths.get(conf.directories.basedir, conf.directories.content)
       val mdProcessor = markdownService.createMarkdownProcessor(conf.site.host)
@@ -63,18 +67,18 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
       val settingsCommonData = Map("title" -> conf.site.title, "description" -> conf.site.description,
         "siteHost" -> conf.site.host, "lastmod" -> conf.site.lastmod)
 
-      def regenerate(): ZTask[Unit] = {
+      def regenerate(): IO[RegenerationError, Unit] = {
         // Rereading content files on every change in case some of them are added/deleted
-        val mdContentFilesZ = ZTask { recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory) }
+        val mdContentFilesZ = Task { recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory) }
 
         val translationsZ = translationService.buildTranslationsZ(i18nDirName, outputPaths.siteDir)
 
         // Making Freemarker re-read templates on every change
-        val htmlTemplatesJobZ = ZTask { templateService.createTemplates(templatesDirName, conf) }
+        val htmlTemplatesJobZ = Task { templateService.createTemplates(templatesDirName, conf) }
         // Last build date changes on every rebuild
         val siteCommonData: Map[String, Object] = settingsCommonData + ("lastBuildDateJ" -> new JavaDate())
 
-        val cleaningJobZ = ZTask {
+        val cleaningJobZ = Task {
           logger.info("Cleaning previous version of the site")
           FileUtils.deleteDirectory(new File(outputPaths.archiveOutput))
           Files.deleteIfExists(Paths.get(outputPaths.indexOutputDir.toString, pageGenerationService.IndexFilename))
@@ -88,7 +92,7 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
           postData
         }
 
-        val resultT = for {
+        val resultZ: Task[Unit] = for {
           htmlTemplates <- htmlTemplatesJobZ
           _ <- cleaningJobZ
           postData <- mdProcessingJobZ
@@ -103,129 +107,76 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
           postJobs = pageGenerationService.generatePostPages(postData, siteCommonData, outputPaths, htmlTemplates,
             translations)
           allJobs = Seq(archiveJob, indexJob) ++ customPageJobs ++ postJobs
-//          result <- ZTask.collectAll(allJobs)
+          result <- Task.collectAll(allJobs).map(_ => ())
         } yield ()
 
-//        resultT.runToFuture
-        ???
-      }
-      ???
-    }
-    ???
-  }
-
-  def run(args: Array[String]): Unit = {
-    val generationMode = commandLineService.parseCommandLineArgs(args) match {
-      case Left(_)      => System.exit(0)
-      case Right(value) => value
-    }
-    val conf = configurationReadingService.parseConfigOrExit()
-
-    val contentDirFile = Paths.get(conf.directories.basedir, conf.directories.content)
-    val mdProcessor = markdownService.createMarkdownProcessor(conf.site.host)
-    val htmlCleaner = new HtmlCleaner()
-    val templatesDirName = Paths.get(conf.directories.basedir, conf.directories.templates).toString
-    val i18nDirName = Paths.get(conf.directories.basedir, conf.directories.templates, "i18n")
-    val outputPaths = getOutputPaths(conf)
-    val settingsCommonData = Map("title" -> conf.site.title, "description" -> conf.site.description,
-      "siteHost" -> conf.site.host, "lastmod" -> conf.site.lastmod)
-
-    def regenerate(): CancelableFuture[Seq[Unit]] = {
-      // Rereading content files on every change in case some of them are added/deleted
-      val mdContentFiles = recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory)
-
-      val translations = translationService.buildTranslations(i18nDirName, outputPaths.siteDir)
-
-      // Making Freemarker re-read templates on every change
-      val htmlTemplatesJob = Task.delay { templateService.createTemplates(templatesDirName, conf) }
-      // Last build date changes on every rebuild
-      val siteCommonData: Map[String, Object] = settingsCommonData + ("lastBuildDateJ" -> new JavaDate())
-
-      val cleaningJob = Task.delay {
-        logger.info("Cleaning previous version of the site")
-        FileUtils.deleteDirectory(new File(outputPaths.archiveOutput))
-        Files.deleteIfExists(Paths.get(outputPaths.indexOutputDir.toString, pageGenerationService.IndexFilename))
+        resultZ.fold(th => RegenerationError(th), identity)
       }
 
-      val mdProcessingJob = Task.delay {
-        logger.info("Generation started")
-        val postData = mdContentFiles.map { mdFile =>
-          markdownService.processMdFile(mdFile, htmlCleaner, mdProcessor)
-        }
-        postData
-      }
-
-      val resultT = for {
-        htmlTemplates <- htmlTemplatesJob
-        _ <- cleaningJob
-        postData <- mdProcessingJob
-        archiveJob = pageGenerationService.generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput,
-          htmlTemplates.archiveTemplate, translations)
-        indexJob = pageGenerationService.generateIndexPage(siteCommonData, outputPaths.indexOutputDir,
-          htmlTemplates.indexTemplate, translations)
-        customPageJobs = pageGenerationService.generateCustomPages(siteCommonData, postData, outputPaths.indexOutputDir,
-          htmlTemplates.customHtmlTemplates, htmlTemplates.customXmlTemplates, translations)
-        postJobs = pageGenerationService.generatePostPages(postData, siteCommonData, outputPaths, htmlTemplates,
-          translations)
-        result <- Task.sequence(Seq(archiveJob, indexJob) ++ customPageJobs ++ postJobs)
-      } yield result
-
-      import monix.execution.Scheduler.Implicits.global
-      resultT.runToFuture
-    }
-
-    val cf = regenerate()
-    logFutureResult(cf)
-
-    if (generationMode != GenerationMode.Once) {
-      val maybeServer = if (generationMode != GenerationMode.MonitorNoServer) {
-        httpServerService.start(outputPaths.siteDir.toString, conf.server.port) match {
-          case Left(th) =>
-            logger.warn(s"Cannot start HTTP server on port ${conf.server.port}", th)
-            None
-          case Right(value) => Some(value)
-        }
-      } else None
-
-      logger.info("Registering a file watcher")
       def fileChanged(file: files.File, action: String): Unit = {
         logger.info(s"File '${file.path.getFileName}' has been $action, regenerating")
-        logFutureResult(regenerate())
+        // TODO: Won't work!!
+        regenerate()
       }
-      val monitor = new FileMonitor(contentDirFile, recursive = true) {
+
+      class CustomFileMonitor(contentDirFile: Path, recursive: Boolean) extends FileMonitor(contentDirFile, recursive) {
         override def onCreate(file: files.File, count: Int): Unit = fileChanged(file, "created")
         override def onModify(file: files.File, count: Int): Unit = fileChanged(file, "updated")
         override def onDelete(file: files.File, count: Int): Unit = fileChanged(file, "deleted")
         override def onException(exc: Throwable): Unit = logger.error("Exception occurred", exc)
       }
 
-      monitor.start()(ExecutionContext.global)
-      logger.info(s"Waiting for changes...")
-      Runtime.getRuntime.addShutdownHook(new Thread() {
-        override def run(): Unit = {
-          logger.info("Stopping the monitor")
-          httpServerService.stop(maybeServer)
+      val withMonitoringZ = if (generationMode != GenerationMode.Once) {
+
+        val serverStartedZ: IO[HttpServerStartError, Option[Server]] =
+          if (generationMode != GenerationMode.MonitorNoServer) {
+            httpServerService.start(outputPaths.siteDir.toString, conf.server.port).option
+          } else IO.succeed(None)
+
+        val monitorRegisteredZ: IO[FileMonitorStartError, FileMonitor] = IO.effectSuspendTotal {
+          try {
+            logger.info("Registering a file watcher")
+            val monitor = new CustomFileMonitor(contentDirFile, recursive = true)
+            monitor.start()(ExecutionContext.global)
+            logger.info(s"Waiting for changes...")
+            IO.succeed(monitor)
+          } catch {
+            case exc: Exception => IO.fail(FileMonitorStartError(exc))
+          }
         }
-      })
-    } else {
-      // Waiting only in the "once" mode. In the "monitor" mode, actor system will prevent us from exiting
-      import scala.concurrent.Await
-      import scala.concurrent.duration._
 
-      Await.result(cf, 5.seconds)
+        def registerShutdownHook(
+            maybeServer: Option[Server], fileMonitor: FileMonitor): IO[ShutdownHookRegistrationError, Unit] = {
+          try {
+            Runtime.getRuntime.addShutdownHook(new Thread() {
+              override def run(): Unit = {
+                logger.info("Stopping the monitor")
+                httpServerService.stop(maybeServer)
+              }
+            })
+            IO.succeed(())
+          } catch {
+            case exc: Exception => IO.fail(ShutdownHookRegistrationError(exc))
+          }
+        }
+
+        val watchingStartedZ: IO[SystemError, Unit] = serverStartedZ.flatMap { maybeServer =>
+          monitorRegisteredZ.flatMap { monitor =>
+            registerShutdownHook(maybeServer, monitor)
+          }
+        }
+
+        watchingStartedZ
+      } else {
+        // Waiting only in the "once" mode. In the "monitor" mode, actor system will prevent us from exiting
+        UIO.succeed(())
+      }
+      regenerate() *> withMonitoringZ
     }
   }
 
-  private def logFutureResult(cf: CancelableFuture[Seq[Unit]]): Unit = {
-    import scala.concurrent.ExecutionContext.Implicits.global
-    cf.andThen {
-      case Success(_)  => logger.info("Generation finished")
-      case Failure(th) => logger.error(s"Exception occurred while running tasks", th)
-    }
-  }
-
-  private def recursiveListFiles(f: File): Array[File] = {
-    val these = f.listFiles
+  private def recursiveListFiles(f: File): Seq[File] = {
+    val these = ArraySeq.unsafeWrapArray(f.listFiles)
     these ++ these.filter(_.isDirectory).flatMap(recursiveListFiles)
   }
 

@@ -2,6 +2,7 @@ npm-debug.log
 .idea
 .bsp
 .metals
+.bloop
 .vscode
 target
 temp/*

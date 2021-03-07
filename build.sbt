@@ -21,7 +21,7 @@ libraryDependencies ++= Seq(
   "com.beachape" %% "enumeratum" % "1.6.1",
   "com.typesafe.play" %% "play-json" % "2.9.2",
   "dev.zio" %% "zio" % "1.0.4-2",
-  "io.monix" %% "monix" % "3.3.0",
+  "org.scala-lang.modules" %% "scala-collection-compat" % "2.4.2",
   "org.eclipse.jetty" % "jetty-server" % "9.4.38.v20210224",
   "net.sourceforge.htmlcleaner" % "htmlcleaner" % "2.24"
 )

@@ -1,8 +1,8 @@
 package com.appliedscala.generator.errors
 
-sealed trait ApplicationError extends Product with Serializable
-sealed abstract class UserError(val message: String) extends ApplicationError
-sealed abstract class SystemError(val cause: Throwable) extends ApplicationError
+sealed trait ApplicationError
+sealed class UserError(val message: String) extends ApplicationError
+sealed class SystemError(val cause: Throwable) extends ApplicationError
 
 case class CommandLineError(override val message: String) extends UserError(message)
 case class ConfigurationError(override val message: String) extends UserError(message)
@@ -10,3 +10,7 @@ case class ConfigurationError(override val message: String) extends UserError(me
 case class GenerationError(override val cause: Throwable) extends SystemError(cause)
 case class HttpServerStartError(override val cause: Throwable) extends SystemError(cause)
 case class HttpServerStopError(override val cause: Throwable) extends SystemError(cause)
+case class FileMonitorStartError(override val cause: Throwable) extends SystemError(cause)
+case class ShutdownHookRegistrationError(override val cause: Throwable) extends SystemError(cause)
+case class RegenerationError(override val cause: Throwable) extends SystemError(cause)
+case class InitError(override val cause: Throwable) extends SystemError(cause)

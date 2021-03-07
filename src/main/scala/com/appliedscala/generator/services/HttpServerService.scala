@@ -4,6 +4,7 @@ import com.appliedscala.generator.errors.{HttpServerStartError, HttpServerStopEr
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.handler.{DefaultHandler, HandlerList, ResourceHandler}
 import org.slf4j.LoggerFactory
+import zio.IO
 
 /** Created by denis on 9/17/16.
   */
@@ -23,26 +24,26 @@ case class HttpServerService() {
     jettyServer
   }
 
-  def start(path: String, port: Int): Either[HttpServerStartError, Server] = {
+  def start(path: String, port: Int): IO[HttpServerStartError, Server] = IO.effectSuspendTotal {
     try {
       val server = createServer(path, port)
       server.start()
       logger.info(s"The HTTP server has been started on port $port")
-      Right(server)
+      IO.succeed(server)
     } catch {
-      case th: Throwable => Left(HttpServerStartError(th))
+      case th: Throwable => IO.fail(HttpServerStartError(th))
     }
   }
 
-  def stop(maybeServer: Option[Server]): Either[HttpServerStopError, Unit] = {
+  def stop(maybeServer: Option[Server]): IO[HttpServerStopError, Unit] = IO.effectSuspendTotal {
     try {
       maybeServer.foreach { server =>
         server.stop()
         logger.info("The HTTP server has been stopped")
       }
-      Right(())
+      IO.succeed(())
     } catch {
-      case th: Throwable => Left(HttpServerStopError(th))
+      case th: Throwable => IO.fail(HttpServerStopError(th))
     }
   }
 }

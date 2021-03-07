@@ -1,6 +1,8 @@
 package com.appliedscala.generator.services
 
+import com.appliedscala.generator.errors.InitError
 import org.slf4j.LoggerFactory
+import zio.IO
 
 import java.io.{File, PrintWriter}
 import java.nio.file.{Files, Paths}
@@ -9,31 +11,36 @@ import scala.io.Source
 class InitService {
   private val logger = LoggerFactory.getLogger(this.getClass)
 
-  def initProjectStructure(): Unit = {
-    println("Initializing...")
-    val classLoader = this.getClass.getClassLoader
-    copyFromClasspath(classLoader, "init/site/css/styles.css", "site/css", "styles.css")
-    copyFromClasspath(classLoader, "init/s2gen.json", ".", "s2gen.json")
-    copyFromClasspath(classLoader, "init/content/hello-world.md", "content/blog/2016", "hello-world.md")
-    val templateNames = Seq(
-      "archive.ftl",
-      "blog.ftl",
-      "footer.ftl",
-      "header.ftl",
-      "index.ftl",
-      "main.ftl",
-      "menu.ftl",
-      "page.ftl",
-      "post.ftl",
-      "sitemap.ftl",
-      "about.ftl",
-      "info.ftl",
-      "feed.ftl"
-    )
-    templateNames.foreach { templateName =>
-      copyFromClasspath(classLoader, s"init/templates/$templateName", "templates", templateName)
+  def initProjectStructure(): IO[InitError, Unit] = IO.effectSuspendTotal {
+    try {
+      println("Initializing...")
+      val classLoader = this.getClass.getClassLoader
+      copyFromClasspath(classLoader, "init/site/css/styles.css", "site/css", "styles.css")
+      copyFromClasspath(classLoader, "init/s2gen.json", ".", "s2gen.json")
+      copyFromClasspath(classLoader, "init/content/hello-world.md", "content/blog/2016", "hello-world.md")
+      val templateNames = Seq(
+        "archive.ftl",
+        "blog.ftl",
+        "footer.ftl",
+        "header.ftl",
+        "index.ftl",
+        "main.ftl",
+        "menu.ftl",
+        "page.ftl",
+        "post.ftl",
+        "sitemap.ftl",
+        "about.ftl",
+        "info.ftl",
+        "feed.ftl"
+      )
+      templateNames.foreach { templateName =>
+        copyFromClasspath(classLoader, s"init/templates/$templateName", "templates", templateName)
+      }
+      println(s"The skeleton project has been generated. Now you can type s2gen to generate HTML files")
+      IO.succeed(())
+    } catch {
+      case exc: Exception => IO.fail(InitError(exc))
     }
-    println(s"The skeleton project has been generated. Now you can type s2gen to generate HTML files")
   }
 
   private def copyFromClasspath(classLoader: ClassLoader, cpPath: String, destinationDir: String,

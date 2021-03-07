@@ -27,22 +27,4 @@ class ConfigurationReadingService {
       }
     }
   }
-
-  def parseConfigOrExit(): ApplicationConfiguration = {
-    if (!Files.exists(Paths.get(confFileName))) {
-      System.err.println(s"Cannot find a configuration file '$confFileName'")
-      System.exit(-1)
-    }
-
-    val confStr = Using.resource(Source.fromFile(confFileName))(_.getLines().mkString(""))
-    Json.parse(confStr).validate[ApplicationConfiguration] match {
-      case JsSuccess(value, _) => value
-      case error: JsError =>
-        val errorMessage = JsError.Message.unapply(error).getOrElse("unknown error")
-        val exception = new ConfigurationError(errorMessage)
-        logger.error("Error occurred while parsing the configuration file", exception)
-        System.exit(-1)
-        throw new RuntimeException
-    }
-  }
 }
