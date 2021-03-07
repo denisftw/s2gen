@@ -5,13 +5,16 @@ import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.handler.{DefaultHandler, HandlerList, ResourceHandler}
 import org.slf4j.LoggerFactory
 import zio.IO
+import zio.Task
+import zio.blocking._
+import zio.ZIO
 
 /** Created by denis on 9/17/16.
   */
 case class HttpServerService() {
   private val logger = LoggerFactory.getLogger(this.getClass)
 
-  private def createServer(path: String, port: Int): Server = {
+  private def createServer(path: String, port: Int): Task[Server] = Task {
     logger.info(s"Starting the HTTP server")
     val jettyServer = new Server(port)
     val resourceHandler = new ResourceHandler()
@@ -24,14 +27,15 @@ case class HttpServerService() {
     jettyServer
   }
 
-  def start(path: String, port: Int): IO[HttpServerStartError, Server] = IO.effectSuspendTotal {
-    try {
-      val server = createServer(path, port)
-      server.start()
-      logger.info(s"The HTTP server has been started on port $port")
-      IO.succeed(server)
-    } catch {
-      case th: Throwable => IO.fail(HttpServerStartError(th))
+  def start(path: String, port: Int): ZIO[Blocking, HttpServerStartError, Server] = {
+    blocking {
+      createServer(path, port).map { server =>
+        server.start()
+        logger.info(s"The HTTP server has been started on port $port")
+        server
+      }
+    }.refineOrDie { case exc: Exception => 
+      HttpServerStartError(exc)
     }
   }
 
