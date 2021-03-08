@@ -1,23 +1,8 @@
 package com.appliedscala.generator
 
-import com.appliedscala.generator.services.{
-  CommandLineService,
-  ConfigurationReadingService,
-  GenerationService,
-  InitService,
-  MarkdownService,
-  PageGenerationService,
-  PreviewService,
-  TemplateService,
-  TranslationService
-}
+import com.appliedscala.generator.services._
 import jam.tree.brew
 import zio.{ExitCode, UIO, URIO, ZEnv, ZIO}
-import com.appliedscala.generator.services.HttpServerService
-import zio.Schedule
-import zio.clock.Clock
-import java.time.LocalDateTime
-import zio.duration.Duration
 
 object Runner extends zio.App {
   class Module {
@@ -30,20 +15,12 @@ object Runner extends zio.App {
     private lazy val previewService: PreviewService = brew[PreviewService]
     private lazy val templateService: TemplateService = brew[TemplateService]
     private lazy val pageGenerationService: PageGenerationService = brew[PageGenerationService]
+    private lazy val monitorService: MonitorService = brew[MonitorService]
+    private lazy val shutdownService: ShutdownService = brew[ShutdownService]
     private lazy val generationService: GenerationService = brew[GenerationService]
 
     def start(environment: ZEnv, args: List[String]): UIO[ExitCode] = {
       generationService.runZ(args).provide(environment)
-    }
-
-    def startHttpServer(environment: ZEnv, args: List[String]): UIO[ExitCode] = {
-      httpServerService.start(".", 9000).provide(environment).fold(
-        sse => {
-          sse.cause.printStackTrace()
-          ExitCode.failure
-        },
-        _ => ExitCode.success
-      )
     }
   }
 

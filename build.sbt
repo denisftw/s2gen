@@ -16,7 +16,7 @@ libraryDependencies ++= Seq(
   "org.slf4j" % "slf4j-api" % "1.7.19",
   "ch.qos.logback" % "logback-classic" % "1.1.6",
   "com.github.pathikrit" %% "better-files" % "3.9.1",
-  "commons-io" % "commons-io" % "2.4",
+  "commons-io" % "commons-io" % "2.8.0",
   "commons-cli" % "commons-cli" % "1.3.1",
   "com.beachape" %% "enumeratum" % "1.6.1",
   "com.typesafe.play" %% "play-json" % "2.9.2",

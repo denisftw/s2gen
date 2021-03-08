@@ -14,7 +14,7 @@ declare -r app_home="$(realpath "$(dirname "$real_script_path")")"
 
 declare -r lib_dir="$EXEC_LOC/../lib"
 
-declare -r app_mainclass="com.appliedscala.generator.SiteGenerator"
+declare -r app_mainclass="com.appliedscala.generator.Runner"
 
 ${{template_declares}}
 

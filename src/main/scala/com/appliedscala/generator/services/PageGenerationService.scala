@@ -1,14 +1,9 @@
 package com.appliedscala.generator.services
 
-import com.appliedscala.generator.model.{
-  CustomHtmlTemplateDescription,
-  CustomXmlTemplateDescription,
-  HtmlTemplates,
-  OutputPaths,
-  TranslationBundle
-}
+import com.appliedscala.generator.model._
 import freemarker.template.Template
-import zio.{ZIO, Task}
+import org.apache.commons.io.FileUtils
+import zio.{Task, ZIO}
 import org.slf4j.LoggerFactory
 
 import java.io.{File, FileWriter}
@@ -20,7 +15,13 @@ class PageGenerationService {
 
   private val logger = LoggerFactory.getLogger(this.getClass)
   private val DateFormatter = new SimpleDateFormat("yyyy-MM-dd")
-  val IndexFilename = "index.html"
+  private val IndexFilename = "index.html"
+
+  def cleanPreviousVersion(archiveOutput: String, indexOutputDir: Path): Task[Unit] = Task {
+    logger.info("Cleaning previous version of the site")
+    FileUtils.deleteDirectory(new File(archiveOutput))
+    Files.deleteIfExists(indexOutputDir.resolve(IndexFilename))
+  }
 
   def generateArchivePage(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
       archiveOutput: String, archiveTemplate: Template, translations: Seq[TranslationBundle]): Task[Unit] = {
