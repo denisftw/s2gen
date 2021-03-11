@@ -6,7 +6,7 @@ sealed trait FileChangeAction extends EnumEntry
 
 object FileChangeAction extends Enum[FileChangeAction] {
   val values = findValues
-  case object Deleted
-  case object Created
-  case object Updated
+  case object Deleted extends FileChangeAction
+  case object Created extends FileChangeAction
+  case object Updated extends FileChangeAction
 }

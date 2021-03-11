@@ -1,11 +1,8 @@
 package com.appliedscala.generator.services
 
-import better.files
-import better.files.FileMonitor
 import com.appliedscala.generator.configuration.ApplicationConfiguration
 import com.appliedscala.generator.errors._
 import com.appliedscala.generator.model._
-import org.apache.commons.io.FileUtils
 import org.eclipse.jetty.server.Server
 import org.htmlcleaner.HtmlCleaner
 import org.slf4j.LoggerFactory
@@ -14,11 +11,11 @@ import zio.{ExitCode, IO, Task, UIO, URIO, ZEnv}
 import java.io._
 import java.nio.file._
 import scala.collection.compat.immutable.ArraySeq
-import scala.concurrent.ExecutionContext
-import scala.util.{Failure, Success}
 import zio.ZIO
-import scala.concurrent.Future
+
 import zio.blocking.Blocking
+import zio.clock.Clock
+import zio.duration._
 
 class GenerationService(commandLineService: CommandLineService, httpServerService: HttpServerService,
     configurationReadingService: ConfigurationReadingService, markdownService: MarkdownService,
@@ -53,7 +50,8 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
     }
   }
 
-  private def generate(environment: ZEnv, generationMode: GenerationMode): ZIO[Blocking, ApplicationError, Unit] = {
+  private def generate(
+      environment: ZEnv, generationMode: GenerationMode): ZIO[Blocking with Clock, ApplicationError, Unit] = {
     ZIO.effectSuspendTotal {
       configurationReadingService.readConfiguration().flatMap { conf =>
         val contentDirFile = Paths.get(conf.directories.basedir, conf.directories.content)
@@ -101,21 +99,22 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
           resultZ.fold(th => RegenerationError(th), identity)
         }
 
-        def fileChanged(file: files.File, action: String): Unit = {
-          logger.info(s"File '${file.path.getFileName}' has been $action, regenerating")
-          zio.Runtime.default.unsafeRun(regenerate())
-        }
-
         val startMonitoringIfNeeded = if (generationMode != GenerationMode.Once) {
           val serverStartedZ: IO[HttpServerStartError, Option[Server]] =
             if (generationMode != GenerationMode.MonitorNoServer) {
               httpServerService.start(outputPaths.siteDir.toString, conf.server.port).provide(environment).option
             } else IO.succeed(None)
 
-          val monitorRegisteredZ = monitorService.registerFileWatcher(contentDirFile, fileChanged)
-          val watchingStartedZ: ZIO[Blocking, SystemError, Unit] = serverStartedZ.flatMap { maybeServer =>
-            monitorRegisteredZ.flatMap { monitor =>
-              shutdownService.registerHook(maybeServer, monitor)
+          val monitorStream = monitorService.registerFileWatcher(contentDirFile).debounce(100.millis).tap { event =>
+            val FileChangeEvent(path, action, when) = event
+            logger.info(s"File '${path.getFileName}' has been '$action' at $when")
+            if (!path.toFile.getName.startsWith(".")) {
+              regenerate()
+            } else ZIO.succeed(())
+          }
+          val watchingStartedZ: ZIO[Blocking with Clock, SystemError, Unit] = serverStartedZ.flatMap { maybeServer =>
+            monitorStream.runDrain.fork.flatMap { monitorFiber =>
+              shutdownService.registerHook(maybeServer)
             }
           }
 

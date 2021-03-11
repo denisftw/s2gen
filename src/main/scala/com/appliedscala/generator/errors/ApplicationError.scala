@@ -10,7 +10,7 @@ case class ConfigurationError(override val message: String) extends UserError(me
 case class GenerationError(override val cause: Throwable) extends SystemError(cause)
 case class HttpServerStartError(override val cause: Throwable) extends SystemError(cause)
 case class HttpServerStopError(override val cause: Throwable) extends SystemError(cause)
-case class FileMonitorStartError(override val cause: Throwable) extends SystemError(cause)
+case class FileMonitorError(override val cause: Throwable) extends SystemError(cause)
 case class ShutdownHookRegistrationError(override val cause: Throwable) extends SystemError(cause)
 case class RegenerationError(override val cause: Throwable) extends SystemError(cause)
 case class InitError(override val cause: Throwable) extends SystemError(cause)
