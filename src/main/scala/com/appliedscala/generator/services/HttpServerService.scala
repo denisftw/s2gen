@@ -9,8 +9,6 @@ import zio.Task
 import zio.blocking._
 import zio.ZIO
 
-/** Created by denis on 9/17/16.
-  */
 case class HttpServerService() {
   private val logger = LoggerFactory.getLogger(this.getClass)
 
@@ -34,20 +32,21 @@ case class HttpServerService() {
         logger.info(s"The HTTP server has been started on port $port")
         server
       }
-    }.refineOrDie { case exc: Exception => 
-      HttpServerStartError(exc)
+    }.refineOrDie { case th: Throwable => 
+      HttpServerStartError(th)
     }
   }
 
-  def stop(maybeServer: Option[Server]): IO[HttpServerStopError, Unit] = IO.effectSuspendTotal {
-    try {
-      maybeServer.foreach { server =>
-        server.stop()
-        logger.info("The HTTP server has been stopped")
+  def stop(maybeServer: Option[Server]): ZIO[Blocking, HttpServerStopError, Unit] = {
+    blocking {
+      Task {
+        maybeServer.foreach { server =>
+          server.stop()
+          logger.info("The HTTP server has been stopped")
+        }
       }
-      IO.succeed(())
-    } catch {
-      case th: Throwable => IO.fail(HttpServerStopError(th))
+    }.refineOrDie { case th: Throwable =>
+      HttpServerStopError(th)
     }
   }
 }

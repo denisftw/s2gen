@@ -8,27 +8,29 @@ import zio.{IO, ZIO}
 
 import java.nio.file.Path
 import scala.concurrent.Future
+import zio.Task
+import zio.blocking._
+import zio.stream.ZStream
+import com.appliedscala.generator.model.FileChangeEvent
 
 class MonitorService {
   private val logger = LoggerFactory.getLogger(this.getClass)
 
   def registerFileWatcher(
-      contentDirFile: Path, fileChanged: (files.File, String) => Unit): IO[FileMonitorStartError, FileMonitor] =
-    IO.effectSuspendTotal {
-      try {
+      contentDirFile: Path, fileChanged: (files.File, String) => Unit): ZIO[Blocking, FileMonitorStartError, FileMonitor] = {
+    blockingExecutor.flatMap { executor =>
+      Task {
         logger.info("Registering a file watcher")
         val monitor = new CustomFileMonitor(contentDirFile, fileChanged)
-        ZIO
-          .fromFuture { implicit executionContext =>
-            monitor.start()
-            logger.info(s"Waiting for changes...")
-            Future.successful(monitor)
-          }
-          .catchAll(th => IO.fail(FileMonitorStartError(th)))
-      } catch {
-        case exc: Exception => IO.fail(FileMonitorStartError(exc))
+        // TODO: Convert to ZStream[FileChangedEvent(path: String, action: FileChangeAction, when: Long)]
+        monitor.start()(executor.asEC)
+        logger.info(s"Waiting for changes...")
+        monitor
       }
+    }.refineOrDie { case th: Throwable => 
+      FileMonitorStartError(th)
     }
+  }
 
   class CustomFileMonitor(contentDirFile: Path, fileChanged: (files.File, String) => Unit)
       extends FileMonitor(contentDirFile, recursive = true) {

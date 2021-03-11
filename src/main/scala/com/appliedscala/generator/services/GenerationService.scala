@@ -53,8 +53,8 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
     }
   }
 
-  private def generate(environment: ZEnv, generationMode: GenerationMode): IO[ApplicationError, Unit] = {
-    IO.effectSuspendTotal {
+  private def generate(environment: ZEnv, generationMode: GenerationMode): ZIO[Blocking, ApplicationError, Unit] = {
+    ZIO.effectSuspendTotal {
       configurationReadingService.readConfiguration().flatMap { conf =>
         val contentDirFile = Paths.get(conf.directories.basedir, conf.directories.content)
         val mdProcessor = markdownService.createMarkdownProcessor(conf.site.host)
@@ -113,7 +113,7 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
             } else IO.succeed(None)
 
           val monitorRegisteredZ = monitorService.registerFileWatcher(contentDirFile, fileChanged)
-          val watchingStartedZ: IO[SystemError, Unit] = serverStartedZ.flatMap { maybeServer =>
+          val watchingStartedZ: ZIO[Blocking, SystemError, Unit] = serverStartedZ.flatMap { maybeServer =>
             monitorRegisteredZ.flatMap { monitor =>
               shutdownService.registerHook(maybeServer, monitor)
             }

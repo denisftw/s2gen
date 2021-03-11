@@ -20,7 +20,8 @@ libraryDependencies ++= Seq(
   "commons-cli" % "commons-cli" % "1.3.1",
   "com.beachape" %% "enumeratum" % "1.6.1",
   "com.typesafe.play" %% "play-json" % "2.9.2",
-  "dev.zio" %% "zio" % "1.0.4-2",
+  "dev.zio" %% "zio" % "1.0.5",
+  "dev.zio" %% "zio-streams" % "1.0.5", 
   "org.scala-lang.modules" %% "scala-collection-compat" % "2.4.2",
   "org.eclipse.jetty" % "jetty-server" % "9.4.38.v20210224",
   "net.sourceforge.htmlcleaner" % "htmlcleaner" % "2.24"
