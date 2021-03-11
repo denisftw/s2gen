@@ -19,15 +19,15 @@ object Runner extends zio.App {
     private lazy val shutdownService: ShutdownService = brew[ShutdownService]
     private lazy val generationService: GenerationService = brew[GenerationService]
 
-    def start(environment: ZEnv, args: List[String]): UIO[ExitCode] = {
-      generationService.runZ(args).provide(environment)
+    def start(args: List[String]): URIO[ZEnv, ExitCode] = {
+      generationService.runZ(args)
     }
   }
 
   override def run(args: List[String]): URIO[ZEnv, ExitCode] = {
-    ZIO.environment[ZEnv].flatMap { env =>
+    ZIO.effectSuspendTotal {
       val module = new Module
-      module.start(env, args)
+      module.start(args)
     }
   }
 }
