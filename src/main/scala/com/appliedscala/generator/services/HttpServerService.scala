@@ -32,7 +32,7 @@ case class HttpServerService() {
         logger.info(s"The HTTP server has been started on port $port")
         server
       }
-    }.refineOrDie { case th: Throwable => 
+    }.refineOrDie { case th: Throwable =>
       HttpServerStartError(th)
     }
   }

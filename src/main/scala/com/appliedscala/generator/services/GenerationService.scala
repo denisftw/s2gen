@@ -13,9 +13,10 @@ import java.nio.file._
 import scala.collection.compat.immutable.ArraySeq
 import zio.ZIO
 
-import zio.blocking.Blocking
+import zio.blocking._
 import zio.clock.Clock
 import zio.duration._
+import zio.ZManaged
 
 class GenerationService(commandLineService: CommandLineService, httpServerService: HttpServerService,
     configurationReadingService: ConfigurationReadingService, markdownService: MarkdownService,
@@ -23,35 +24,34 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
     templateService: TemplateService, monitorService: MonitorService, shutdownService: ShutdownService) {
 
   import java.util.{Date => JavaDate}
-
+  private val DebounceTime = 100.millis
   private val logger = LoggerFactory.getLogger(this.getClass)
 
   def runZ(args: List[String]): URIO[ZEnv, ExitCode] = {
     commandLineService
       .parseCommandLineArgsZ(args.toArray)
       .flatMap(generateIfRequired)
-      .fold(handleApplicationError, identity)
+      .catchAll(handleApplicationError)
   }
 
-  private def handleApplicationError(error: ApplicationError): ExitCode = {
-    error match {
-      case userError: UserError     => println(userError.message)
-      case systemError: SystemError => logger.error("Exception occurred", systemError.cause)
+  private def handleApplicationError(error: ApplicationError): UIO[ExitCode] = {
+    UIO {
+      error match {
+        case userError: UserError     => println(userError.message)
+        case systemError: SystemError => logger.error("Exception occurred", systemError.cause)
+      }
+      ExitCode.failure
     }
-    ExitCode.failure
   }
 
   private def generateIfRequired(parsed: Either[Unit, GenerationMode]): ZIO[ZEnv, ApplicationError, ExitCode] = {
-    ZIO.accessM[ZEnv] { environment =>
-      parsed match {
-        case Left(_)     => IO.succeed(ExitCode.success)
-        case Right(mode) => generate(environment, mode).map(_ => ExitCode.success)
-      }
+    parsed match {
+      case Left(_)     => IO.succeed(ExitCode.success)
+      case Right(mode) => generate(mode).map(_ => ExitCode.success)
     }
   }
 
-  private def generate(
-      environment: ZEnv, generationMode: GenerationMode): ZIO[Blocking with Clock, ApplicationError, Unit] = {
+  private def generate(generationMode: GenerationMode): ZIO[ZEnv, ApplicationError, Unit] = {
     ZIO.effectSuspendTotal {
       configurationReadingService.readConfiguration().flatMap { conf =>
         val contentDirFile = Paths.get(conf.directories.basedir, conf.directories.content)
@@ -63,15 +63,15 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
         val settingsCommonData = Map("title" -> conf.site.title, "description" -> conf.site.description,
           "siteHost" -> conf.site.host, "lastmod" -> conf.site.lastmod)
 
-        def regenerate(): IO[RegenerationError, Unit] = {
+        def regenerate(): ZIO[Blocking, RegenerationError, Unit] = {
           // Rereading content files on every change in case some of them are added/deleted
-          val mdContentFilesZ = Task { recursiveListFiles(contentDirFile.toFile).filterNot(_.isDirectory) }
+          val mdContentFilesZ = recursiveListFiles(contentDirFile.toFile)
           val translationsZ = translationService.buildTranslationsZ(i18nDirName, outputPaths.siteDir)
           // Making Freemarker re-read templates on every change
           val htmlTemplatesJobZ = Task { templateService.createTemplates(templatesDirName, conf) }
           // Last build date changes on every rebuild
           val siteCommonData: Map[String, Object] = settingsCommonData + ("lastBuildDateJ" -> new JavaDate())
-          val cleaningJobZ =
+          val cleanPrevious =
             pageGenerationService.cleanPreviousVersion(outputPaths.archiveOutput, outputPaths.indexOutputDir)
           val mdProcessingJobZ = mdContentFilesZ.map { mdContentFiles =>
             logger.info("Generation started")
@@ -79,9 +79,9 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
               markdownService.processMdFile(mdFile, htmlCleaner, mdProcessor)
             }
           }
-          val resultZ: Task[Unit] = for {
+          val resultZ = for {
             htmlTemplates <- htmlTemplatesJobZ
-            _ <- cleaningJobZ
+            _ <- cleanPrevious
             postData <- mdProcessingJobZ
             translations <- translationsZ
             archiveJob = pageGenerationService.generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput,
@@ -96,29 +96,29 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
             allJobs = Seq(archiveJob, indexJob) ++ customPageJobs ++ postJobs
             result <- Task.collectAll(allJobs).map(_ => ())
           } yield ()
-          resultZ.fold(th => RegenerationError(th), identity)
+          resultZ.catchAll(th => ZIO.succeed(RegenerationError(th)))
         }
 
         val startMonitoringIfNeeded = if (generationMode != GenerationMode.Once) {
-          val serverStartedZ: IO[HttpServerStartError, Option[Server]] =
-            if (generationMode != GenerationMode.MonitorNoServer) {
-              httpServerService.start(outputPaths.siteDir.toString, conf.server.port).provide(environment).option
-            } else IO.succeed(None)
+          val serverStarted = if (generationMode != GenerationMode.MonitorNoServer) {
+            httpServerService.start(outputPaths.siteDir.toString, conf.server.port).option
+          } else IO.succeed(None)
 
-          val monitorStream = monitorService.registerFileWatcher(contentDirFile).debounce(100.millis).tap { event =>
+          val monitorStream = monitorService.registerFileWatcher(contentDirFile).debounce(DebounceTime).tap { event =>
             val FileChangeEvent(path, action, when) = event
-            logger.info(s"File '${path.getFileName}' has been '$action' at $when")
+            logger.info("File '{}' has been '{}' at {}", path.getFileName, action.toString().toLowerCase(), when)
             if (!path.toFile.getName.startsWith(".")) {
               regenerate()
             } else ZIO.succeed(())
           }
-          val watchingStartedZ: ZIO[Blocking with Clock, SystemError, Unit] = serverStartedZ.flatMap { maybeServer =>
-            monitorStream.runDrain.fork.flatMap { monitorFiber =>
-              shutdownService.registerHook(maybeServer)
-            }
-          }
 
-          watchingStartedZ *> IO.never.as(())
+          for {
+            maybeServer <- serverStarted
+            monitorFiber <- monitorStream.runDrain.fork
+            stopMonitorCallback = () => monitorFiber.interrupt
+            _ <- shutdownService.registerHook(maybeServer, stopMonitorCallback)
+            _ <- monitorFiber.join
+          } yield ()
         } else {
           UIO.succeed(())
         }
@@ -127,9 +127,16 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
     }
   }
 
-  private def recursiveListFiles(f: File): Seq[File] = {
-    val these = ArraySeq.unsafeWrapArray(f.listFiles)
-    these ++ these.filter(_.isDirectory).flatMap(recursiveListFiles)
+  private def recursiveListFiles(f: File): ZIO[Blocking, Throwable, Seq[File]] = {
+    def loop(f: File): Seq[File] = {
+      val these = ArraySeq.unsafeWrapArray(f.listFiles)
+      these ++ these.filter(_.isDirectory).flatMap(loop)
+    }
+    blocking {
+      Task {
+        loop(f).filterNot(_.isDirectory)
+      }
+    }
   }
 
   private def getOutputPaths(conf: ApplicationConfiguration): OutputPaths = {
