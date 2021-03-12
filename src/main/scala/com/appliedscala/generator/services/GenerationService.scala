@@ -100,7 +100,7 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
         }
 
         val startMonitoringIfNeeded = if (generationMode != GenerationMode.Once) {
-          val serverStarted = if (generationMode != GenerationMode.MonitorNoServer) {
+          val startServerIfNeeded = if (generationMode != GenerationMode.MonitorNoServer) {
             httpServerService.start(outputPaths.siteDir.toString, conf.server.port).option
           } else IO.succeed(None)
 
@@ -113,11 +113,12 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
           }
 
           for {
-            maybeServer <- serverStarted
+            maybeServer <- startServerIfNeeded
             monitorFiber <- monitorStream.runDrain.fork
-            stopMonitorCallback = () => monitorFiber.interrupt
-            _ <- shutdownService.registerHook(maybeServer, stopMonitorCallback)
-            _ <- monitorFiber.join
+            stopTask <- shutdownService.registerHook(maybeServer)
+            stopTaskFiber <- stopTask.fork
+            _ <- stopTaskFiber.join
+            _ <- monitorFiber.interrupt
           } yield ()
         } else {
           UIO.succeed(())
