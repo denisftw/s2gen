@@ -200,7 +200,7 @@ If you want to generate one of your custom pages (i.e Privacy Policy) from Markd
 
 Then, assuming that the `title` is indeed `Privacy Policy`, inside of your Freemarker template, reference the content as follows:
 
-```
+```text
 <#if misc["Privacy Policy"]??>
   <#if misc["Privacy Policy"][currentLanguage]??>
     ${misc["Privacy Policy"][currentLanguage].body}
