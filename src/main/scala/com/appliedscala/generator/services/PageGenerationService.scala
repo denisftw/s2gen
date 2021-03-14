@@ -126,21 +126,17 @@ class PageGenerationService {
     ZIO
       .foreach(translations) { langBundle =>
         blocking {
-          ZIO {
-            val langOutputDir = langBundle.siteDir.toFile
-            if (!langOutputDir.exists()) {
-              langOutputDir.mkdir()
-            }
-            postData.filter { obj =>
-              obj.get("type").contains("post")
-            } map { contentObj =>
-              generateSingleBlogFile(siteCommonData, contentObj, langOutputDir.toString, htmlTemplates.postTemplate,
-                langBundle)
-            }
+          val langOutputDir = langBundle.siteDir.toFile
+          if (!langOutputDir.exists()) {
+            langOutputDir.mkdir()
+          }
+          val onlyPosts = postData.filter(_.get("type").contains("post"))
+          ZIO.foreach(onlyPosts) { contentObj =>
+            generateSingleBlogFile(siteCommonData, contentObj, langOutputDir.toString, htmlTemplates.postTemplate,
+              langBundle)
           }
         }
       }
-      .catchAll(th => ZIO.fail(GenerationError(th)))
       .as(())
   }
 
