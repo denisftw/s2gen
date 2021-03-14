@@ -25,9 +25,7 @@ object Runner extends zio.App {
   }
 
   override def run(args: List[String]): URIO[ZEnv, ExitCode] = {
-    ZIO.effectSuspendTotal {
-      val module = new Module
-      module.start(args)
-    }
+    val module = new Module
+    module.start(args)
   }
 }

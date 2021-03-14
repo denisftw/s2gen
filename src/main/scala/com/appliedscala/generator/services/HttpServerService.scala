@@ -32,8 +32,8 @@ case class HttpServerService() {
         logger.info(s"The HTTP server has been started on port $port")
         server
       }
-    }.refineOrDie { case th: Throwable =>
-      HttpServerStartError(th)
+    }.catchAll { th =>
+      ZIO.fail(HttpServerStartError(th))
     }
   }
 
@@ -45,8 +45,8 @@ case class HttpServerService() {
           logger.info("The HTTP server has been stopped")
         }
       }
-    }.refineOrDie { case th: Throwable =>
-      HttpServerStopError(th)
+    }.catchAll { th =>
+      ZIO.fail(HttpServerStopError(th))
     }
   }
 }

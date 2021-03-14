@@ -32,8 +32,8 @@ class MonitorService {
             logger.info(s"Waiting for changes...")
           }
         }
-        .refineOrDie { case th: Throwable =>
-          FileMonitorError(th)
+        .catchAll { th =>
+          ZIO.fail(FileMonitorError(th))
         }
     }
   }

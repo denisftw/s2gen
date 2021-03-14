@@ -22,8 +22,8 @@ class ShutdownService(httpServerService: HttpServerService) {
             }
           })
         }
-      }.refineOrDie { case th: Throwable =>
-        ShutdownHookRegistrationError(th)
+      }.catchAll { th =>
+        ZIO.fail(ShutdownHookRegistrationError(th))
       }
     }
   }

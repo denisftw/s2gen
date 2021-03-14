@@ -14,3 +14,6 @@ case class FileMonitorError(override val cause: Throwable) extends SystemError(c
 case class ShutdownHookRegistrationError(override val cause: Throwable) extends SystemError(cause)
 case class RegenerationError(override val cause: Throwable) extends SystemError(cause)
 case class InitError(override val cause: Throwable) extends SystemError(cause)
+case class TemplateEngineError(override val cause: Throwable) extends SystemError(cause)
+case class TranslationBuildingError(override val cause: Throwable) extends SystemError(cause)
+case class MarkdownGenerationError(override val cause: Throwable) extends SystemError(cause)

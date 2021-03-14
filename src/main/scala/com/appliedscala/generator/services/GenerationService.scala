@@ -6,7 +6,7 @@ import com.appliedscala.generator.model._
 import org.eclipse.jetty.server.Server
 import org.htmlcleaner.HtmlCleaner
 import org.slf4j.LoggerFactory
-import zio.{ExitCode, IO, Task, UIO, URIO, ZEnv}
+import zio.{ExitCode, IO, UIO, URIO, ZEnv}
 
 import java.io._
 import java.nio.file._
@@ -16,14 +16,12 @@ import zio.ZIO
 import zio.blocking._
 import zio.clock.Clock
 import zio.duration._
-import zio.ZManaged
 
 class GenerationService(commandLineService: CommandLineService, httpServerService: HttpServerService,
     configurationReadingService: ConfigurationReadingService, markdownService: MarkdownService,
     translationService: TranslationService, pageGenerationService: PageGenerationService,
     templateService: TemplateService, monitorService: MonitorService, shutdownService: ShutdownService) {
 
-  import java.util.{Date => JavaDate}
   private val DebounceTime = 100.millis
   private val logger = LoggerFactory.getLogger(this.getClass)
 
@@ -52,90 +50,72 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
   }
 
   private def generate(generationMode: GenerationMode): ZIO[ZEnv, ApplicationError, Unit] = {
-    ZIO.effectSuspendTotal {
-      configurationReadingService.readConfiguration().flatMap { conf =>
-        val contentDirFile = Paths.get(conf.directories.basedir, conf.directories.content)
-        val mdProcessor = markdownService.createMarkdownProcessor(conf.site.host)
-        val htmlCleaner = new HtmlCleaner()
-        val templatesDirName = Paths.get(conf.directories.basedir, conf.directories.templates).toString
-        val i18nDirName = Paths.get(conf.directories.basedir, conf.directories.templates, "i18n")
-        val outputPaths = getOutputPaths(conf)
-        val settingsCommonData = Map("title" -> conf.site.title, "description" -> conf.site.description,
-          "siteHost" -> conf.site.host, "lastmod" -> conf.site.lastmod)
+    configurationReadingService.readConfiguration().flatMap { conf =>
+      val contentDirFile = Paths.get(conf.directories.basedir, conf.directories.content)
+      val mdProcessor = markdownService.createMarkdownProcessor(conf.site.host)
+      val htmlCleaner = new HtmlCleaner()
+      val templatesDirName = Paths.get(conf.directories.basedir, conf.directories.templates).toString
+      val i18nDirName = Paths.get(conf.directories.basedir, conf.directories.templates, "i18n")
+      val outputPaths = getOutputPaths(conf)
+      val settingsCommonData = Map("title" -> conf.site.title, "description" -> conf.site.description,
+        "siteHost" -> conf.site.host, "lastmod" -> conf.site.lastmod)
 
-        def regenerate(): ZIO[Blocking, RegenerationError, Unit] = {
+      def regenerate(): ZIO[Blocking, SystemError, Unit] = {
+        for {
+          _ <- UIO(logger.info("Generation started"))
           // Rereading content files on every change in case some of them are added/deleted
-          val mdContentFilesZ = recursiveListFiles(contentDirFile.toFile)
-          val translationsZ = translationService.buildTranslationsZ(i18nDirName, outputPaths.siteDir)
+          contentFiles <- recursiveListFiles(contentDirFile.toFile)
           // Making Freemarker re-read templates on every change
-          val htmlTemplatesJobZ = Task { templateService.createTemplates(templatesDirName, conf) }
+          htmlTemplates <- templateService.createTemplates(templatesDirName, conf)
           // Last build date changes on every rebuild
-          val siteCommonData: Map[String, Object] = settingsCommonData + ("lastBuildDateJ" -> new JavaDate())
-          val cleanPrevious =
-            pageGenerationService.cleanPreviousVersion(outputPaths.archiveOutput, outputPaths.indexOutputDir)
-          val mdProcessingJobZ = mdContentFilesZ.map { mdContentFiles =>
-            logger.info("Generation started")
-            mdContentFiles.map { mdFile =>
-              markdownService.processMdFile(mdFile, htmlCleaner, mdProcessor)
-            }
-          }
-          val resultZ = for {
-            htmlTemplates <- htmlTemplatesJobZ
-            _ <- cleanPrevious
-            postData <- mdProcessingJobZ
-            translations <- translationsZ
-            archiveJob = pageGenerationService.generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput,
-              htmlTemplates.archiveTemplate, translations)
-            indexJob = pageGenerationService.generateIndexPage(siteCommonData, outputPaths.indexOutputDir,
-              htmlTemplates.indexTemplate, translations)
-            customPageJobs = pageGenerationService.generateCustomPages(siteCommonData, postData,
-              outputPaths.indexOutputDir, htmlTemplates.customHtmlTemplates, htmlTemplates.customXmlTemplates,
-              translations)
-            postJobs = pageGenerationService.generatePostPages(postData, siteCommonData, outputPaths, htmlTemplates,
-              translations)
-            allJobs = Seq(archiveJob, indexJob) ++ customPageJobs ++ postJobs
-            result <- Task.collectAll(allJobs).map(_ => ())
-          } yield ()
-          resultZ.catchAll(th => ZIO.succeed(RegenerationError(th)))
-        }
-
-        val startMonitoringIfNeeded = if (generationMode != GenerationMode.Once) {
-          val startServerIfNeeded = if (generationMode != GenerationMode.MonitorNoServer) {
-            httpServerService.start(outputPaths.siteDir.toString, conf.server.port).option
-          } else IO.succeed(None)
-
-          val monitorStream = monitorService.registerFileWatcher(contentDirFile).debounce(DebounceTime).tap { event =>
-            val FileChangeEvent(path, action, when) = event
-            logger.info("File '{}' has been '{}' at {}", path.getFileName, action.toString().toLowerCase(), when)
-            if (!path.toFile.getName.startsWith(".")) {
-              regenerate()
-            } else ZIO.succeed(())
-          }
-
-          for {
-            maybeServer <- startServerIfNeeded
-            monitorFiber <- monitorStream.runDrain.fork
-            stopTask <- shutdownService.registerHook(maybeServer)
-            stopTaskFiber <- stopTask.fork
-            _ <- stopTaskFiber.join
-            _ <- monitorFiber.interrupt
-          } yield ()
-        } else {
-          UIO.succeed(())
-        }
-        regenerate() *> startMonitoringIfNeeded
+          siteCommonData = pageGenerationService.addBuildDateInformation(settingsCommonData)
+          _ <- pageGenerationService.cleanPreviousVersion(outputPaths.archiveOutput, outputPaths.indexOutputDir)
+          postData <- markdownService.processMdFiles(contentFiles, htmlCleaner, mdProcessor)
+          translations <- translationService.buildTranslations(i18nDirName, outputPaths.siteDir)
+          _ <- pageGenerationService.generateArchivePage(siteCommonData, postData, outputPaths.archiveOutput,
+            htmlTemplates.archiveTemplate, translations)
+          _ <- pageGenerationService.generateIndexPage(siteCommonData, outputPaths.indexOutputDir,
+            htmlTemplates.indexTemplate, translations)
+          _ <- pageGenerationService.generateCustomPages(siteCommonData, postData, outputPaths.indexOutputDir,
+            htmlTemplates.customHtmlTemplates, htmlTemplates.customXmlTemplates, translations)
+          _ <- pageGenerationService.generatePostPages(postData, siteCommonData, outputPaths, htmlTemplates,
+            translations)
+        } yield ()
       }
+
+      val startMonitoringIfNeeded = ZIO.when(generationMode != GenerationMode.Once) {
+        val startServerIfNeeded = if (generationMode != GenerationMode.MonitorNoServer) {
+          httpServerService.start(outputPaths.siteDir.toString, conf.server.port).option
+        } else IO.succeed(None)
+
+        val monitorStream = monitorService.registerFileWatcher(contentDirFile).debounce(DebounceTime).tap { event =>
+          val FileChangeEvent(path, action, when) = event
+          logger.info("File '{}' has been '{}' at {}", path.getFileName, action.toString().toLowerCase(), when)
+          ZIO.when(!path.toFile.getName.startsWith("."))(regenerate())
+        }
+        for {
+          maybeServer <- startServerIfNeeded
+          monitorFiber <- monitorStream.runDrain.fork
+          stopApplicationTask <- shutdownService.registerHook(maybeServer)
+          stopTaskFiber <- stopApplicationTask.fork
+          _ <- stopTaskFiber.join
+          _ <- monitorFiber.interrupt
+        } yield ()
+      }
+      regenerate() *> startMonitoringIfNeeded
     }
   }
 
-  private def recursiveListFiles(f: File): ZIO[Blocking, Throwable, Seq[File]] = {
+  private def recursiveListFiles(f: File): ZIO[Blocking, GenerationError, Seq[File]] = {
     def loop(f: File): Seq[File] = {
       val these = ArraySeq.unsafeWrapArray(f.listFiles)
       these ++ these.filter(_.isDirectory).flatMap(loop)
     }
     blocking {
-      Task {
+      ZIO {
         loop(f).filterNot(_.isDirectory)
+      }.catchAll { th =>
+        ZIO.fail(GenerationError(th))
       }
     }
   }

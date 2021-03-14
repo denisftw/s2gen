@@ -1,6 +1,7 @@
 package com.appliedscala.generator.services
 
 import com.appliedscala.generator.model.MarkdownProcessor
+import com.appliedscala.generator.errors._
 import com.vladsch.flexmark.ast.Link
 import com.vladsch.flexmark.html.HtmlRenderer
 import com.vladsch.flexmark.html.renderer.{AttributablePart, NodeRenderer, NodeRenderingHandler}
@@ -16,6 +17,9 @@ import java.nio.file.Paths
 import java.util
 import scala.io.Source
 import scala.util.Using
+import zio.ZIO
+import zio.blocking._
+import zio.UIO
 
 class MarkdownService(previewService: PreviewService) {
 
@@ -30,43 +34,66 @@ class MarkdownService(previewService: PreviewService) {
     MarkdownProcessor(parser, renderer)
   }
 
-  def processMdFile(mdFile: File, htmlCleaner: HtmlCleaner, mdProcessor: MarkdownProcessor): Map[String, String] = {
-    val postContent = Using.resource(Source.fromFile(mdFile))(_.getLines().toList)
-    val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
-    val propertiesLines = postContent.take(separatorLineNumber)
-    val contentLines = postContent.drop(separatorLineNumber + 1)
-
-    val contentPropertyMap = propertiesLines.flatMap { propertyLine =>
-      val pair = propertyLine.split("=")
-      pair match {
-        case Array(first, second) => Some(first -> second)
-        case _                    => None
+  def processMdFiles(mdFiles: Seq[File], htmlCleaner: HtmlCleaner, mdProcessor: MarkdownProcessor)
+      : ZIO[Blocking, MarkdownGenerationError, Seq[Map[String, String]]] = {
+    ZIO
+      .foreach(mdFiles) { mdFile =>
+        processMdFile(mdFile, htmlCleaner, mdProcessor)
       }
-    }.toMap
-    val mdContent = contentLines.mkString("\n")
-    val mdPreview = previewService.extractPreview(mdContent)
+      .catchAll { th =>
+        ZIO.fail(MarkdownGenerationError(th))
+      }
+  }
 
-    val renderedMdContent = mdProcessor.renderer.render(mdProcessor.parser.parse(mdContent))
-    val htmlPreview = mdPreview.map { preview =>
-      mdProcessor.renderer.render(mdProcessor.parser.parse(preview))
+  private def readPostContent(mdFile: File): ZIO[Blocking, Throwable, List[String]] = {
+    blocking {
+      ZIO.bracket(ZIO(Source.fromFile(mdFile))) { bufferedSource =>
+        UIO(bufferedSource.close())
+      } { bufferedSource =>
+        ZIO(bufferedSource.getLines().toList)
+      }
     }
-    val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
+  }
 
-    val mapBuilder = Map.newBuilder[String, String]
-    mapBuilder ++= contentPropertyMap
-    mapBuilder ++= Map(
-      "body" -> renderedMdContent,
-      "sourceDirectoryPath" -> mdFile.getParentFile.getAbsolutePath,
-      "sourceFilename" -> simpleFilename
-    )
-    htmlPreview.foreach { preview =>
-      val previewText = htmlCleaner.clean(preview).getText.toString
+  private def processMdFile(mdFile: File, htmlCleaner: HtmlCleaner, mdProcessor: MarkdownProcessor)
+      : ZIO[Blocking, Throwable, Map[String, String]] = {
+    readPostContent(mdFile).map { postContent =>
+      val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
+      val propertiesLines = postContent.take(separatorLineNumber)
+      val contentLines = postContent.drop(separatorLineNumber + 1)
+
+      val contentPropertyMap = propertiesLines.flatMap { propertyLine =>
+        val pair = propertyLine.split("=")
+        pair match {
+          case Array(first, second) => Some(first -> second)
+          case _                    => None
+        }
+      }.toMap
+      val mdContent = contentLines.mkString("\n")
+      val mdPreview = previewService.extractPreview(mdContent)
+
+      val renderedMdContent = mdProcessor.renderer.render(mdProcessor.parser.parse(mdContent))
+      val htmlPreview = mdPreview.map { preview =>
+        mdProcessor.renderer.render(mdProcessor.parser.parse(preview))
+      }
+      val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
+
+      val mapBuilder = Map.newBuilder[String, String]
+      mapBuilder ++= contentPropertyMap
       mapBuilder ++= Map(
-        "preview" -> preview,
-        "previewText" -> previewText
+        "body" -> renderedMdContent,
+        "sourceDirectoryPath" -> mdFile.getParentFile.getAbsolutePath,
+        "sourceFilename" -> simpleFilename
       )
+      htmlPreview.foreach { preview =>
+        val previewText = htmlCleaner.clean(preview).getText.toString
+        mapBuilder ++= Map(
+          "preview" -> preview,
+          "previewText" -> previewText
+        )
+      }
+      mapBuilder.result()
     }
-    mapBuilder.result()
   }
 
   class TargetBlankLinkRendererExtension(siteUrl: String) extends HtmlRenderer.HtmlRendererExtension {

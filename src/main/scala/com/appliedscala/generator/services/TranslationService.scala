@@ -1,6 +1,7 @@
 package com.appliedscala.generator.services
 
 import com.appliedscala.generator.model.TranslationBundle
+import com.appliedscala.generator.errors.TranslationBuildingError
 import zio.Task
 
 import java.io.{File, FileInputStream, InputStreamReader}
@@ -9,39 +10,55 @@ import java.nio.file.{Files, Path}
 import java.util.Properties
 import scala.collection.mutable.ListBuffer
 import scala.util.Using
+import zio.ZIO
+import zio.blocking._
+import zio.ZManaged
+import java.io.IOException
+import zio.URIO
+import zio.UIO
 
 class TranslationService {
-
-  def buildTranslationsZ(i18nDirName: Path, siteDir: Path): Task[Seq[TranslationBundle]] = {
-    Task {
-      buildTranslations(i18nDirName, siteDir)
-    }
-  }
-
-  def buildTranslations(i18nDirName: Path, siteDir: Path): Seq[TranslationBundle] = {
-    val i18nListBuffer = new ListBuffer[TranslationBundle]
-    if (Files.isDirectory(i18nDirName)) {
-      i18nDirName.toFile.listFiles().map { propertyFile =>
-        val langCode = propertyFile.getName.split("\\.")(0)
-        val props = readPropertiesFile(propertyFile)
-        if (langCode == "default") {
-          i18nListBuffer += TranslationBundle("", props, new File(siteDir.toFile, "").toPath)
+  def buildTranslations(
+      i18nDirName: Path, siteDir: Path): ZIO[Blocking, TranslationBuildingError, Seq[TranslationBundle]] = {
+    blocking {
+      Task {
+        if (Files.isDirectory(i18nDirName)) {
+          i18nDirName.toFile.listFiles().toSeq
+        } else Nil
+      }.flatMap { propertyFiles =>
+        if (propertyFiles.nonEmpty) {
+          ZIO.foreachParN(10)(propertyFiles) { propertyFile =>
+            val langCode = propertyFile.getName.split("\\.")(0)
+            readPropertiesFile(propertyFile).map { props =>
+              if (langCode == "default") {
+                TranslationBundle("", props, new File(siteDir.toFile, "").toPath)
+              } else {
+                TranslationBundle(langCode, props, new File(siteDir.toFile, langCode).toPath)
+              }
+            }
+          }
         } else {
-          i18nListBuffer += TranslationBundle(langCode, props, new File(siteDir.toFile, langCode).toPath)
+          ZIO.succeed(Seq(TranslationBundle("", Map.empty[String, Object], new File(siteDir.toFile, "").toPath)))
         }
+      }.catchAll { case th =>
+        ZIO.fail(TranslationBuildingError(th))
       }
     }
-    val result = i18nListBuffer.result()
-    if (result.isEmpty) Seq(TranslationBundle("", Map.empty[String, Object], new File(siteDir.toFile, "").toPath))
-    else result
   }
 
-  private def readPropertiesFile(propertyFile: File): Map[String, String] = {
-    Using.resource(new FileInputStream(propertyFile)) { fileStream =>
-      val prop = new Properties()
-      prop.load(new InputStreamReader(fileStream, Charset.forName("UTF-8")))
+  private def readPropertiesFile(propertyFile: File): ZIO[Blocking, Throwable, Map[String, String]] = {
+    ZIO.bracket {
+      blocking(Task {
+        val fileStream = new FileInputStream(propertyFile)
+        val properties = new Properties()
+        properties.load(new InputStreamReader(fileStream, Charset.forName("UTF-8")))
+        (fileStream, properties)
+      })
+    } { case (fis, _) =>
+      URIO(fis.close())
+    } { case (_, properties) =>
       import scala.jdk.CollectionConverters.PropertiesHasAsScala
-      prop.asScala.toMap
+      UIO.succeed(properties.asScala.toMap)
     }
   }
 }
