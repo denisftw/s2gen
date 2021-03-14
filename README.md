@@ -59,22 +59,18 @@ In order to generate the site, simply type `s2gen`:
 
 ```
 $ s2gen
-[15:20:11.513] [INFO ] S2Generator - Cleaning previous version of the site
-[15:20:11.518] [INFO ] S2Generator - Generation started
-[15:20:11.707] [INFO ] S2Generator - Successfully generated: <archive>
-[15:20:11.709] [INFO ] S2Generator - Successfully generated: <sitemap>
-[15:20:11.711] [INFO ] S2Generator - Successfully generated: <index>
-[15:20:11.712] [INFO ] S2Generator - Successfully generated: <about>
-[15:20:11.722] [INFO ] S2Generator - Successfully generated: 2016/hello-world.md
-[15:20:11.724] [INFO ] S2HttpServer - Starting the HTTP server
-[15:20:11.727] [INFO ] S2Generator - Generation finished
-[15:20:11.738] [INFO ] log - Logging initialized @980ms
-[15:20:11.771] [INFO ] Server - jetty-9.3.11.v20160721
-[15:20:11.845] [INFO ] AbstractConnector - Started ServerConnector@562457e1{HTTP/1.1}{0.0.0.0:8080}
-[15:20:11.845] [INFO ] Server - Started @1090ms
-[15:20:11.845] [INFO ] S2HttpServer - The HTTP server has been started on port 8080
-[15:20:11.845] [INFO ] S2Generator - Registering a file watcher
-[15:20:12.135] [INFO ] S2Generator - Waiting for changes...
+[15:21:41.415] [INFO ] GenerationService - Generation started
+[15:21:41.606] [INFO ] PageGenerationService - Cleaning up the previous version
+[15:21:41.775] [INFO ] PageGenerationService - Successfully generated: <archive> 
+[15:21:41.785] [INFO ] PageGenerationService - Successfully generated: <index> 
+[15:21:41.801] [INFO ] PageGenerationService - Successfully generated: <about> 
+[15:21:41.806] [INFO ] PageGenerationService - Successfully generated: <feed.xml> 
+[15:21:41.806] [INFO ] PageGenerationService - Successfully generated: <sitemap.xml> 
+[15:21:41.823] [INFO ] PageGenerationService - Successfully generated: 2016/hello-world.md 
+[15:21:41.887] [INFO ] HttpServerService - Starting the HTTP server
+[15:21:41.950] [INFO ] HttpServerService - The HTTP server has been started on port 8080
+[15:21:42.267] [INFO ] MonitorService - Registering a file watcher
+[15:21:42.289] [INFO ] MonitorService - Waiting for changes...
 ```
 
 After generating, **s2gen** switches to the monitor mode and starts waiting for file changes.
