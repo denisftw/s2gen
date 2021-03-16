@@ -3,19 +3,17 @@ package com.appliedscala.generator.services
 import com.appliedscala.generator.configuration.ApplicationConfiguration
 import com.appliedscala.generator.errors._
 import com.appliedscala.generator.model._
-import org.eclipse.jetty.server.Server
 import org.htmlcleaner.HtmlCleaner
 import org.slf4j.LoggerFactory
 import zio.{ExitCode, IO, UIO, URIO, ZEnv}
 
 import java.io._
 import java.nio.file._
-import scala.collection.compat.immutable.ArraySeq
 import zio.ZIO
-
 import zio.blocking._
-import zio.clock.Clock
 import zio.duration._
+
+import scala.annotation.tailrec
 
 class GenerationService(commandLineService: CommandLineService, httpServerService: HttpServerService,
     configurationReadingService: ConfigurationReadingService, markdownService: MarkdownService,
@@ -64,7 +62,7 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
         for {
           _ <- UIO(logger.info("Generation started"))
           // Rereading content files on every change in case some of them are added/deleted
-          contentFiles <- recursiveListFiles(contentDirFile.toFile)
+          contentFiles <- findContentFiles(contentDirFile)
           // Making Freemarker re-read templates on every change
           htmlTemplates <- templateService.createTemplates(templatesDirName, conf)
           // Last build date changes on every rebuild
@@ -90,7 +88,7 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
 
         val monitorStream = monitorService.registerFileWatcher(contentDirFile).debounce(DebounceTime).tap { event =>
           val FileChangeEvent(path, action, when) = event
-          logger.info("File '{}' has been '{}' at {}", path.getFileName, action.toString().toLowerCase(), when)
+          logger.info("File '{}' has been '{}' at {}", path.getFileName, action.toString.toLowerCase(), when)
           ZIO.when(!path.toFile.getName.startsWith("."))(regenerate())
         }
         for {
@@ -106,14 +104,20 @@ class GenerationService(commandLineService: CommandLineService, httpServerServic
     }
   }
 
-  private def recursiveListFiles(f: File): ZIO[Blocking, GenerationError, Seq[File]] = {
-    def loop(f: File): Seq[File] = {
-      val these = ArraySeq.unsafeWrapArray(f.listFiles)
-      these ++ these.filter(_.isDirectory).flatMap(loop)
+  private def findContentFiles(root: Path): ZIO[Blocking, GenerationError, Seq[File]] = {
+    @tailrec
+    def loop(directories: Seq[File], result: Seq[File]): Seq[File] = {
+      val (subdirectories, files) = directories.flatMap(_.listFiles).partition(_.isDirectory)
+      val updatedResult = result ++ files
+      if (subdirectories.isEmpty) {
+        updatedResult
+      } else {
+        loop(subdirectories, updatedResult)
+      }
     }
     blocking {
       ZIO {
-        loop(f).filterNot(_.isDirectory)
+        loop(Seq(root).filter(Files.isDirectory(_)).map(_.toFile), Nil)
       }.catchAll { th =>
         ZIO.fail(GenerationError(th))
       }
