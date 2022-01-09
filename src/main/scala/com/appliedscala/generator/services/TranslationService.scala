@@ -8,12 +8,8 @@ import java.io.{File, FileInputStream, InputStreamReader}
 import java.nio.charset.Charset
 import java.nio.file.{Files, Path}
 import java.util.Properties
-import scala.collection.mutable.ListBuffer
-import scala.util.Using
 import zio.ZIO
 import zio.blocking._
-import zio.ZManaged
-import java.io.IOException
 import zio.URIO
 import zio.UIO
 

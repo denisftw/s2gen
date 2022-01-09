@@ -2,7 +2,7 @@ package com.appliedscala.generator
 
 import com.appliedscala.generator.services._
 import jam._
-import zio.{ExitCode, UIO, URIO, ZEnv, ZIO, ZLayer}
+import zio.{ExitCode, URIO, ZEnv, ZLayer}
 
 object Runner extends zio.App {
   class Module {

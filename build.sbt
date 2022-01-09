@@ -2,7 +2,7 @@ name := "s2gen"
 
 version := "0.3.7"
 
-scalaVersion := "2.13.5"
+scalaVersion := "2.13.7"
 
 scalacOptions := Seq("-target:jvm-1.8", "-unchecked", "-deprecation")
 
