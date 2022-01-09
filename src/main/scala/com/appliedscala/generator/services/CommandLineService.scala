@@ -3,14 +3,15 @@ package com.appliedscala.generator.services
 import com.appliedscala.generator.errors.{ApplicationError, CommandLineError}
 import com.appliedscala.generator.model.{CommandLineOption, CustomHtmlTemplateDescription, GenerationMode}
 import org.apache.commons.cli.{DefaultParser, HelpFormatter, Options}
-import zio.IO
+import zio.{Has, IO, ZIO}
 
 import scala.util.Try
 
-class CommandLineService(initService: InitService) {
+object CommandLineService {
 
-  def parseCommandLineArgsZ(args: Array[String]): IO[ApplicationError, Either[Unit, GenerationMode]] =
-    IO.effectSuspendTotal {
+  def parseCommandLineArgsZ(
+      args: Array[String]): ZIO[Has[InitService], ApplicationError, Either[Unit, GenerationMode]] = {
+    ZIO.service[InitService].flatMap { initService =>
       val options = new Options
       CommandLineOption.values.foreach { option =>
         options.addOption(option.option, false, option.description)
@@ -39,4 +40,5 @@ class CommandLineService(initService: InitService) {
         IO.fail(CommandLineError(s"Unrecognized option: ${cmd.getOptions.head.getOpt}"))
       }
     }
+  }
 }

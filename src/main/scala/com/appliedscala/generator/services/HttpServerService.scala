@@ -4,7 +4,6 @@ import com.appliedscala.generator.errors.{HttpServerStartError, HttpServerStopEr
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.handler.{DefaultHandler, HandlerList, ResourceHandler}
 import org.slf4j.LoggerFactory
-import zio.IO
 import zio.Task
 import zio.blocking._
 import zio.ZIO

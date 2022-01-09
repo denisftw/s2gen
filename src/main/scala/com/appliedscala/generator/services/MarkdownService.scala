@@ -16,12 +16,10 @@ import java.io.File
 import java.nio.file.Paths
 import java.util
 import scala.io.Source
-import scala.util.Using
-import zio.ZIO
+import zio.{Has, UIO, ZIO}
 import zio.blocking._
-import zio.UIO
 
-class MarkdownService(previewService: PreviewService) {
+object MarkdownService {
 
   private val PropertiesSeparator = "~~~~~~"
 
@@ -35,7 +33,7 @@ class MarkdownService(previewService: PreviewService) {
   }
 
   def processMdFiles(mdFiles: Seq[File], htmlCleaner: HtmlCleaner, mdProcessor: MarkdownProcessor)
-      : ZIO[Blocking, MarkdownGenerationError, Seq[Map[String, String]]] = {
+      : ZIO[Blocking with Has[PreviewService], MarkdownGenerationError, Seq[Map[String, String]]] = {
     ZIO
       .foreach(mdFiles) { mdFile =>
         processMdFile(mdFile, htmlCleaner, mdProcessor)
@@ -56,43 +54,45 @@ class MarkdownService(previewService: PreviewService) {
   }
 
   private def processMdFile(mdFile: File, htmlCleaner: HtmlCleaner, mdProcessor: MarkdownProcessor)
-      : ZIO[Blocking, Throwable, Map[String, String]] = {
-    readPostContent(mdFile).map { postContent =>
-      val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
-      val propertiesLines = postContent.take(separatorLineNumber)
-      val contentLines = postContent.drop(separatorLineNumber + 1)
+      : ZIO[Blocking with Has[PreviewService], Throwable, Map[String, String]] = {
+    ZIO.service[PreviewService].flatMap { previewService =>
+      readPostContent(mdFile).map { postContent =>
+        val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
+        val propertiesLines = postContent.take(separatorLineNumber)
+        val contentLines = postContent.drop(separatorLineNumber + 1)
 
-      val contentPropertyMap = propertiesLines.flatMap { propertyLine =>
-        val pair = propertyLine.split("=")
-        pair match {
-          case Array(first, second) => Some(first -> second)
-          case _                    => None
+        val contentPropertyMap = propertiesLines.flatMap { propertyLine =>
+          val pair = propertyLine.split("=")
+          pair match {
+            case Array(first, second) => Some(first -> second)
+            case _                    => None
+          }
+        }.toMap
+        val mdContent = contentLines.mkString("\n")
+        val mdPreview = previewService.extractPreview(mdContent)
+
+        val renderedMdContent = mdProcessor.renderer.render(mdProcessor.parser.parse(mdContent))
+        val htmlPreview = mdPreview.map { preview =>
+          mdProcessor.renderer.render(mdProcessor.parser.parse(preview))
         }
-      }.toMap
-      val mdContent = contentLines.mkString("\n")
-      val mdPreview = previewService.extractPreview(mdContent)
+        val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
 
-      val renderedMdContent = mdProcessor.renderer.render(mdProcessor.parser.parse(mdContent))
-      val htmlPreview = mdPreview.map { preview =>
-        mdProcessor.renderer.render(mdProcessor.parser.parse(preview))
-      }
-      val simpleFilename = Paths.get(mdFile.getParentFile.getName, mdFile.getName).toString
-
-      val mapBuilder = Map.newBuilder[String, String]
-      mapBuilder ++= contentPropertyMap
-      mapBuilder ++= Map(
-        "body" -> renderedMdContent,
-        "sourceDirectoryPath" -> mdFile.getParentFile.getAbsolutePath,
-        "sourceFilename" -> simpleFilename
-      )
-      htmlPreview.foreach { preview =>
-        val previewText = htmlCleaner.clean(preview).getText.toString
+        val mapBuilder = Map.newBuilder[String, String]
+        mapBuilder ++= contentPropertyMap
         mapBuilder ++= Map(
-          "preview" -> preview,
-          "previewText" -> previewText
+          "body" -> renderedMdContent,
+          "sourceDirectoryPath" -> mdFile.getParentFile.getAbsolutePath,
+          "sourceFilename" -> simpleFilename
         )
+        htmlPreview.foreach { preview =>
+          val previewText = htmlCleaner.clean(preview).getText.toString
+          mapBuilder ++= Map(
+            "preview" -> preview,
+            "previewText" -> previewText
+          )
+        }
+        mapBuilder.result()
       }
-      mapBuilder.result()
     }
   }
 

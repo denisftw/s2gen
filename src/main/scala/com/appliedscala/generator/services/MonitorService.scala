@@ -15,7 +15,7 @@ import com.appliedscala.generator.model.FileChangeAction
 class MonitorService {
   private val logger = LoggerFactory.getLogger(this.getClass)
 
-  def registerFileWatcher(contentDirFile: Path): ZStream[Blocking, FileMonitorError, FileChangeEvent] = {
+  def registerFileWatcher(dirFiles: Seq[Path]): ZStream[Blocking, FileMonitorError, FileChangeEvent] = {
     ZStream.effectAsyncM[Blocking, FileMonitorError, FileChangeEvent] { pushMessage =>
       blockingExecutor
         .flatMap { executor =>
@@ -27,8 +27,10 @@ class MonitorService {
             def exceptionOccurred(th: Throwable): Unit = {
               pushMessage(ZIO.fail(Some(FileMonitorError(th))))
             }
-            val monitor = new CustomFileMonitor(contentDirFile, fileChanged, exceptionOccurred)
-            monitor.start()(executor.asEC)
+            dirFiles.foreach { dirFile =>
+              val monitor = new CustomFileMonitor(dirFile, fileChanged, exceptionOccurred)
+              monitor.start()(executor.asEC)
+            }
             logger.info(s"Waiting for changes...")
           }
         }
