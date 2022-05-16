@@ -1,8 +1,8 @@
 name := "s2gen"
 
-version := "0.3.7"
+version := "0.3.8"
 
-scalaVersion := "2.13.7"
+scalaVersion := "2.13.8"
 
 scalacOptions := Seq("-target:jvm-1.8", "-unchecked", "-deprecation")
 
@@ -11,7 +11,7 @@ val flexmarkVersion = "0.62.2"
 libraryDependencies ++= Seq(
   "com.github.yakivy" %% "jam-core" % "0.1.0" % Provided,
   "com.vladsch.flexmark" % "flexmark-ext-tables" % flexmarkVersion,
-  "com.vladsch.flexmark" % "flexmark-profile-pegdown" % flexmarkVersion,
+  "com.vladsch.flexmark" % "flexmark-ext-attributes" % flexmarkVersion,
   "org.freemarker" % "freemarker" % "2.3.31",
   "org.slf4j" % "slf4j-api" % "1.7.32",
   "ch.qos.logback" % "logback-classic" % "1.2.10",

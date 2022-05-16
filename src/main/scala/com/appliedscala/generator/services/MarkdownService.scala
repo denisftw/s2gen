@@ -5,8 +5,7 @@ import com.appliedscala.generator.errors._
 import com.vladsch.flexmark.ast.Link
 import com.vladsch.flexmark.html.HtmlRenderer
 import com.vladsch.flexmark.html.renderer.{AttributablePart, NodeRenderer, NodeRenderingHandler}
-import com.vladsch.flexmark.parser.{Parser, PegdownExtensions}
-import com.vladsch.flexmark.profile.pegdown.PegdownOptionsAdapter
+import com.vladsch.flexmark.parser.Parser
 import com.vladsch.flexmark.util.data.{DataHolder, MutableDataHolder}
 import com.vladsch.flexmark.util.html.MutableAttributes
 import com.vladsch.flexmark.util.sequence.BasedSequence
@@ -18,6 +17,11 @@ import java.util
 import scala.io.Source
 import zio.{Has, UIO, ZIO}
 import zio.blocking._
+import com.vladsch.flexmark.util.data.MutableDataSet
+import com.vladsch.flexmark.ast.FencedCodeBlock
+import com.vladsch.flexmark.ext.tables.TablesExtension
+import com.vladsch.flexmark.ext.attributes.AttributesExtension
+import com.vladsch.flexmark.util.misc.Extension
 
 object MarkdownService {
 
@@ -25,8 +29,11 @@ object MarkdownService {
 
   def createMarkdownProcessor(host: String): MarkdownProcessor = {
     val linkRendererExtension = new TargetBlankLinkRendererExtension(host)
-    val pegdownExtensions = PegdownExtensions.TABLES | PegdownExtensions.FENCED_CODE_BLOCKS
-    val options = PegdownOptionsAdapter.flexmarkOptions(pegdownExtensions, linkRendererExtension)
+    val options = new MutableDataSet() 
+    val extensions: util.Collection[Extension] = util.Arrays.asList(TablesExtension.create(), linkRendererExtension)
+    options
+        .set(Parser.EXTENSIONS, extensions)
+        .set(AttributesExtension.FENCED_CODE_INFO_ATTRIBUTES, Boolean.box(true))
     val parser = Parser.builder(options).build()
     val renderer = HtmlRenderer.builder(options).build()
     MarkdownProcessor(parser, renderer)

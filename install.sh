@@ -2,7 +2,7 @@
 
 DESTINATION_DIR=~/DevTools/s2gen
 
-sbt clean universal:stage
+sbt clean Universal/stage
 
 COMPILATION_SUCCESSFUL=$?
 
