@@ -15,32 +15,33 @@ import java.io.File
 import java.nio.file.Paths
 import java.util
 import scala.io.Source
-import zio.{Has, UIO, ZIO}
-import zio.blocking._
+import zio._
 import com.vladsch.flexmark.util.data.MutableDataSet
-import com.vladsch.flexmark.ast.FencedCodeBlock
 import com.vladsch.flexmark.ext.tables.TablesExtension
 import com.vladsch.flexmark.ext.attributes.AttributesExtension
 import com.vladsch.flexmark.util.misc.Extension
 
-object MarkdownService {
+class MarkdownService(previewService: PreviewService) {
 
   private val PropertiesSeparator = "~~~~~~"
 
   def createMarkdownProcessor(host: String): MarkdownProcessor = {
     val linkRendererExtension = new TargetBlankLinkRendererExtension(host)
-    val options = new MutableDataSet() 
+    val options = new MutableDataSet()
     val extensions: util.Collection[Extension] = util.Arrays.asList(TablesExtension.create(), linkRendererExtension)
     options
-        .set(Parser.EXTENSIONS, extensions)
-        .set(AttributesExtension.FENCED_CODE_INFO_ATTRIBUTES, Boolean.box(true))
+      .set(Parser.EXTENSIONS, extensions)
+      .set(AttributesExtension.FENCED_CODE_INFO_ATTRIBUTES, Boolean.box(true))
     val parser = Parser.builder(options).build()
     val renderer = HtmlRenderer.builder(options).build()
     MarkdownProcessor(parser, renderer)
   }
 
-  def processMdFiles(mdFiles: Seq[File], htmlCleaner: HtmlCleaner, mdProcessor: MarkdownProcessor)
-      : ZIO[Blocking with Has[PreviewService], MarkdownGenerationError, Seq[Map[String, String]]] = {
+  def processMdFiles(
+      mdFiles: Seq[File],
+      htmlCleaner: HtmlCleaner,
+      mdProcessor: MarkdownProcessor
+  ): IO[MarkdownGenerationError, Seq[Map[String, String]]] = {
     ZIO
       .foreach(mdFiles) { mdFile =>
         processMdFile(mdFile, htmlCleaner, mdProcessor)
@@ -50,19 +51,22 @@ object MarkdownService {
       }
   }
 
-  private def readPostContent(mdFile: File): ZIO[Blocking, Throwable, List[String]] = {
-    blocking {
-      ZIO.bracket(ZIO(Source.fromFile(mdFile))) { bufferedSource =>
-        UIO(bufferedSource.close())
+  private def readPostContent(mdFile: File): Task[List[String]] = {
+    ZIO.blocking {
+      ZIO.acquireReleaseWith(ZIO.succeed(Source.fromFile(mdFile))) { bufferedSource =>
+        ZIO.succeed(bufferedSource.close())
       } { bufferedSource =>
-        ZIO(bufferedSource.getLines().toList)
+        ZIO.succeed(bufferedSource.getLines().toList)
       }
     }
   }
 
-  private def processMdFile(mdFile: File, htmlCleaner: HtmlCleaner, mdProcessor: MarkdownProcessor)
-      : ZIO[Blocking with Has[PreviewService], Throwable, Map[String, String]] = {
-    ZIO.service[PreviewService].flatMap { previewService =>
+  private def processMdFile(
+      mdFile: File,
+      htmlCleaner: HtmlCleaner,
+      mdProcessor: MarkdownProcessor
+  ): Task[Map[String, String]] = {
+    ZIO.suspendSucceed {
       readPostContent(mdFile).map { postContent =>
         val separatorLineNumber = postContent.indexWhere(_.startsWith(PropertiesSeparator))
         val propertiesLines = postContent.take(separatorLineNumber)
@@ -107,17 +111,19 @@ object MarkdownService {
     class TargetBlankLinkRenderer extends NodeRenderer {
       override def getNodeRenderingHandlers: util.Set[NodeRenderingHandler[_]] = {
         val set = new util.HashSet[NodeRenderingHandler[_]]()
-        val linkHandler = new NodeRenderingHandler[Link](classOf[Link],
+        val linkHandler = new NodeRenderingHandler[Link](
+          classOf[Link],
           (node, context, writer) => {
-          if (!node.getUrl.startsWith("/") && !node.getUrl.containsAllOf(BasedSequence.of(siteUrl))) {
-            val attributes = new MutableAttributes()
-            attributes.addValue("target", "_blank")
-            val updated = context.extendRenderingNodeAttributes(AttributablePart.NODE, attributes)
-            writer.setAttributes(updated).getContext.delegateRender()
-          } else {
-            context.delegateRender();
+            if (!node.getUrl.startsWith("/") && !node.getUrl.containsAllOf(BasedSequence.of(siteUrl))) {
+              val attributes = new MutableAttributes()
+              attributes.addValue("target", "_blank")
+              val updated = context.extendRenderingNodeAttributes(AttributablePart.NODE, attributes)
+              writer.setAttributes(updated).getContext.delegateRender()
+            } else {
+              context.delegateRender();
+            }
           }
-        })
+        )
         set.add(linkHandler);
         set
       }

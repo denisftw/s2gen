@@ -1,12 +1,13 @@
 name := "s2gen"
 
-version := "0.3.8"
+version := "0.3.9"
 
 scalaVersion := "2.13.8"
 
 scalacOptions := Seq("-target:jvm-1.8", "-unchecked", "-deprecation")
 
 val flexmarkVersion = "0.62.2"
+val zioVersion = "2.0.0"
 
 libraryDependencies ++= Seq(
   "com.github.yakivy" %% "jam-core" % "0.1.0" % Provided,
@@ -20,8 +21,8 @@ libraryDependencies ++= Seq(
   "commons-cli" % "commons-cli" % "1.5.0",
   "com.beachape" %% "enumeratum" % "1.7.0",
   "com.typesafe.play" %% "play-json" % "2.9.2",
-  "dev.zio" %% "zio" % "1.0.12",
-  "dev.zio" %% "zio-streams" % "1.0.12",
+  "dev.zio" %% "zio" % zioVersion,
+  "dev.zio" %% "zio-streams" % zioVersion,
   "org.scala-lang.modules" %% "scala-collection-compat" % "2.6.0",
   "org.eclipse.jetty" % "jetty-server" % "9.4.44.v20210927",
   "net.sourceforge.htmlcleaner" % "htmlcleaner" % "2.25"

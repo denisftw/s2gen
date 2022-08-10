@@ -2,9 +2,9 @@ package com.appliedscala.generator
 
 import com.appliedscala.generator.services._
 import jam._
-import zio.{ExitCode, URIO, ZEnv, ZLayer}
+import zio._
 
-object Runner extends zio.App {
+object Runner extends ZIOAppDefault {
   class Module {
     private lazy val initService: InitService = brewRec[InitService]
     private lazy val httpServerService: HttpServerService = brewRec[HttpServerService]
@@ -16,14 +16,18 @@ object Runner extends zio.App {
     private lazy val monitorService: MonitorService = brewRec[MonitorService]
     private lazy val shutdownService: ShutdownService = brewRec[ShutdownService]
     private lazy val generationService: GenerationService = brewRec[GenerationService]
+    private lazy val commandLineService: CommandLineService = brewRec[CommandLineService]
 
-    def start(args: List[String]): URIO[ZEnv, ExitCode] = {
-      generationService.runZ(args).provideSomeLayer[ZEnv](ZLayer.succeed(previewService) ++ ZLayer.succeed(initService))
+    def start(args: List[String]): UIO[ExitCode] = {
+      generationService.run(args)
     }
   }
 
-  override def run(args: List[String]): URIO[ZEnv, ExitCode] = {
-    val module = new Module
-    module.start(args)
+  override def run = {
+    for {
+      args <- getArgs
+      module = new Module
+      app <- module.start(args.toList)
+    } yield app
   }
 }

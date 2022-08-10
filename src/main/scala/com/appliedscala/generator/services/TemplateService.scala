@@ -5,29 +5,30 @@ import com.appliedscala.generator.model.{CustomHtmlTemplateDescription, CustomXm
 import freemarker.template.{Configuration, TemplateExceptionHandler}
 
 import java.io.File
-import zio.ZIO
-import zio.blocking._
+import zio._
 import com.appliedscala.generator.errors.TemplateEngineError
-import zio.Task
 
 class TemplateService {
 
-  private def createFreemarkerConfig(templateDirName: String): ZIO[Blocking, TemplateEngineError, Configuration] = {
-    blocking {
-      Task {
+  private def createFreemarkerConfig(templateDirName: String): IO[TemplateEngineError, Configuration] = {
+    ZIO
+      .attemptBlocking {
         val cfg = new Configuration(Configuration.VERSION_2_3_20)
         cfg.setDirectoryForTemplateLoading(new File(templateDirName))
         cfg.setDefaultEncoding("UTF-8")
         cfg.setTemplateExceptionHandler(TemplateExceptionHandler.RETHROW_HANDLER)
         cfg
-      }.catchAll { th =>
+
+      }
+      .catchAll { th =>
         ZIO.fail(TemplateEngineError(th))
       }
-    }
   }
 
   def createTemplates(
-      templatesDirName: String, conf: ApplicationConfiguration): ZIO[Blocking, TemplateEngineError, HtmlTemplates] = {
+      templatesDirName: String,
+      conf: ApplicationConfiguration
+  ): IO[TemplateEngineError, HtmlTemplates] = {
     createFreemarkerConfig(templatesDirName).map { cfg =>
       val postTemplate = cfg.getTemplate(conf.templates.post)
       val archiveTemplate = cfg.getTemplate(conf.templates.archive)

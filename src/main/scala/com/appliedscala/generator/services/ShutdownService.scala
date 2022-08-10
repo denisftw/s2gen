@@ -2,29 +2,27 @@ package com.appliedscala.generator.services
 
 import org.eclipse.jetty.server.Server
 import org.slf4j.LoggerFactory
-import zio.blocking._
-import zio.ZIO
-import zio.Task
+import zio._
 import com.appliedscala.generator.errors._
+import java.lang.{Runtime => JavaRuntime}
 
 class ShutdownService(httpServerService: HttpServerService) {
   private val logger = LoggerFactory.getLogger(this.getClass)
 
-  def registerHook(maybeServer: Option[Server])
-      : ZIO[Blocking, ShutdownHookRegistrationError, ZIO[Blocking, HttpServerStopError, Unit]] = {
-    blocking {
-      Task {
-        ZIO.effectAsync[Blocking, HttpServerStopError, Unit] { register =>
-          Runtime.getRuntime.addShutdownHook(new Thread() {
+  def registerHook(maybeServer: Option[Server]): IO[ShutdownHookRegistrationError, IO[HttpServerStopError, Unit]] = {
+    ZIO
+      .attemptBlocking {
+        ZIO.async[Any, HttpServerStopError, Unit] { register =>
+          JavaRuntime.getRuntime.addShutdownHook(new Thread() {
             override def run(): Unit = {
               logger.info("Stopping the system")
               register.apply(httpServerService.stop(maybeServer))
             }
           })
         }
-      }.catchAll { th =>
+      }
+      .catchAll { th =>
         ZIO.fail(ShutdownHookRegistrationError(th))
       }
-    }
   }
 }

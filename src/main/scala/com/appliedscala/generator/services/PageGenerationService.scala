@@ -3,17 +3,14 @@ package com.appliedscala.generator.services
 import com.appliedscala.generator.model._
 import freemarker.template.Template
 import org.apache.commons.io.FileUtils
-import zio.{Task, ZIO}
 import org.slf4j.LoggerFactory
 
 import java.io.{File, FileWriter}
 import java.nio.file.{Files, Path, Paths}
 import java.text.SimpleDateFormat
 import java.util.{Date => JavaDate, Map => JavaMap}
-import zio.UIO
-import zio.blocking._
+import zio._
 import com.appliedscala.generator.errors.GenerationError
-import zio.URIO
 
 class PageGenerationService {
 
@@ -21,21 +18,26 @@ class PageGenerationService {
   private val DateFormatter = new SimpleDateFormat("yyyy-MM-dd")
   private val IndexFilename = "index.html"
 
-  def cleanPreviousVersion(archiveOutput: String, indexOutputDir: Path): ZIO[Blocking, GenerationError, Unit] = {
-    blocking {
-      Task {
+  def cleanPreviousVersion(archiveOutput: String, indexOutputDir: Path): IO[GenerationError, Unit] = {
+    ZIO
+      .attemptBlocking {
         logger.info("Cleaning up the previous version")
         FileUtils.deleteDirectory(new File(archiveOutput))
         Files.deleteIfExists(indexOutputDir.resolve(IndexFilename))
-      }.as(())
-    }.catchAll { th =>
-      ZIO.fail(GenerationError(th))
-    }
+      }
+      .catchAll { th =>
+        ZIO.fail(GenerationError(th))
+      }
+      .as(())
   }
 
-  def generateArchivePage(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
-      archiveOutput: String, archiveTemplate: Template, translations: Seq[TranslationBundle])
-      : ZIO[Blocking, GenerationError, Unit] = {
+  def generateArchivePage(
+      siteCommonData: Map[String, Object],
+      postData: Seq[Map[String, String]],
+      archiveOutput: String,
+      archiveTemplate: Template,
+      translations: Seq[TranslationBundle]
+  ): IO[GenerationError, Unit] = {
 
     ZIO
       .foreach(translations) { langBundle =>
@@ -46,22 +48,26 @@ class PageGenerationService {
         }
         val archiveOutputFile = new File(langOutputDir, "index.html")
         renderTemplate(archiveOutputFile, archiveTemplate, inputProps).tap { _ =>
-          UIO(logger.info(s"Successfully generated: <archive> ${langBundle.langCode}"))
+          ZIO.succeed(logger.info(s"Successfully generated: <archive> ${langBundle.langCode}"))
         }
       }
       .catchAll(th => ZIO.fail(GenerationError(th)))
       .as(())
   }
 
-  def generateCustomPages(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]], indexOutputDir: Path,
+  def generateCustomPages(
+      siteCommonData: Map[String, Object],
+      postData: Seq[Map[String, String]],
+      indexOutputDir: Path,
       customTemplateGens: Seq[CustomHtmlTemplateDescription],
-      customXmlTemplateDescriptions: Seq[CustomXmlTemplateDescription], translations: Seq[TranslationBundle])
-      : ZIO[Blocking, GenerationError, Unit] = {
+      customXmlTemplateDescriptions: Seq[CustomXmlTemplateDescription],
+      translations: Seq[TranslationBundle]
+  ): IO[GenerationError, Unit] = {
 
     ZIO
       .foreach(translations) { translationBundle =>
         val inputProps = buildInputProps(siteCommonData, postData, translationBundle)
-        val htmlPart = blocking {
+        val htmlPart = ZIO.blocking {
           ZIO.foreach(customTemplateGens) { gen =>
             val dirName = Paths.get(translationBundle.siteDir.toFile.toString, gen.name)
             if (Files.notExists(dirName)) {
@@ -69,12 +75,12 @@ class PageGenerationService {
             }
             val indexOutputFile = new File(dirName.toString, IndexFilename)
             renderTemplate(indexOutputFile, gen.template, inputProps).tap { _ =>
-              UIO(logger.info(s"Successfully generated: <${gen.name}> ${translationBundle.langCode}"))
+              ZIO.succeed(logger.info(s"Successfully generated: <${gen.name}> ${translationBundle.langCode}"))
             }
           }
         }
 
-        val xmlPart = blocking {
+        val xmlPart = ZIO.blocking {
           ZIO.foreach(customXmlTemplateDescriptions) { gen =>
             val dirName = Paths.get(translationBundle.siteDir.toFile.toString)
             if (Files.notExists(dirName)) {
@@ -82,7 +88,7 @@ class PageGenerationService {
             }
             val indexOutputFile = new File(dirName.toString, gen.name)
             renderTemplate(indexOutputFile, gen.template, inputProps).tap { _ =>
-              UIO(logger.info(s"Successfully generated: <${gen.name}> ${translationBundle.langCode}"))
+              ZIO.succeed(logger.info(s"Successfully generated: <${gen.name}> ${translationBundle.langCode}"))
             }
           }
         }
@@ -92,11 +98,15 @@ class PageGenerationService {
       .as(())
   }
 
-  def generateIndexPage(siteCommonData: Map[String, Object], indexOutputDir: Path, indexTemplate: Template,
-      translations: Seq[TranslationBundle]): ZIO[Blocking, GenerationError, Unit] = {
+  def generateIndexPage(
+      siteCommonData: Map[String, Object],
+      indexOutputDir: Path,
+      indexTemplate: Template,
+      translations: Seq[TranslationBundle]
+  ): IO[GenerationError, Unit] = {
     ZIO
       .foreach(translations) { langBundle =>
-        blocking {
+        ZIO.blocking {
           val langOutputDir = langBundle.siteDir.toFile
           if (!langOutputDir.exists()) {
             langOutputDir.mkdir()
@@ -112,7 +122,7 @@ class PageGenerationService {
               "currentLanguage" -> langBundle.langCode
             ).asJava
           ).tap { _ =>
-            UIO(logger.info(s"Successfully generated: <index> ${langBundle.langCode}"))
+            ZIO.succeed(logger.info(s"Successfully generated: <index> ${langBundle.langCode}"))
           }
         }
       }
@@ -120,20 +130,29 @@ class PageGenerationService {
       .as(())
   }
 
-  def generatePostPages(postData: Seq[Map[String, String]], siteCommonData: Map[String, Object],
-      outputPaths: OutputPaths, htmlTemplates: HtmlTemplates, translations: Seq[TranslationBundle])
-      : ZIO[Blocking, GenerationError, Unit] = {
+  def generatePostPages(
+      postData: Seq[Map[String, String]],
+      siteCommonData: Map[String, Object],
+      outputPaths: OutputPaths,
+      htmlTemplates: HtmlTemplates,
+      translations: Seq[TranslationBundle]
+  ): IO[GenerationError, Unit] = {
     ZIO
       .foreach(translations) { langBundle =>
-        blocking {
+        ZIO.blocking {
           val langOutputDir = langBundle.siteDir.toFile
           if (!langOutputDir.exists()) {
             langOutputDir.mkdir()
           }
           val onlyPosts = postData.filter(_.get("type").contains("post"))
           ZIO.foreach(onlyPosts) { contentObj =>
-            generateSingleBlogFile(siteCommonData, contentObj, langOutputDir.toString, htmlTemplates.postTemplate,
-              langBundle)
+            generateSingleBlogFile(
+              siteCommonData,
+              contentObj,
+              langOutputDir.toString,
+              htmlTemplates.postTemplate,
+              langBundle
+            )
           }
         }
       }
@@ -150,14 +169,20 @@ class PageGenerationService {
     post + ("dateJ" -> dateJ)
   }
 
-  private def generateSingleBlogFile(siteCommonData: Map[String, Object], contentObj: Map[String, String],
-      globalOutputDir: String, template: Template, langBundle: TranslationBundle)
-      : ZIO[Blocking, GenerationError, Unit] = {
+  private def generateSingleBlogFile(
+      siteCommonData: Map[String, Object],
+      contentObj: Map[String, String],
+      globalOutputDir: String,
+      template: Template,
+      langBundle: TranslationBundle
+  ): IO[GenerationError, Unit] = {
     val sourceFilename = contentObj("sourceFilename")
-    blocking {
-      ZIO.effectSuspendTotal {
-        val outputLink = contentObj.getOrElse("link",
-          throw new Exception(s"The required link property is not specified for $sourceFilename"))
+    ZIO
+      .blocking {
+        val outputLink = contentObj.getOrElse(
+          "link",
+          throw new Exception(s"The required link property is not specified for $sourceFilename")
+        )
 
         val maybeLanguage = contentObj.get("language")
         if (
@@ -188,26 +213,29 @@ class PageGenerationService {
           ).asJava
           val outputFile = new File(outputDir.toFile, outputFilename)
           renderTemplate(outputFile, template, input).tap { _ =>
-            UIO(logger.info(s"Successfully generated: $sourceFilename ${langBundle.langCode}"))
+            ZIO.succeed(logger.info(s"Successfully generated: $sourceFilename ${langBundle.langCode}"))
           }
         } else ZIO.unit
       }
-    }.catchAll(th => ZIO.fail(GenerationError(th))).as(())
+      .catchAll(th => ZIO.fail(GenerationError(th)))
+      .as(())
   }
 
-  private def renderTemplate(
-      outputFile: File, template: Template, input: java.util.Map[String, _]): ZIO[Blocking, Throwable, Unit] = {
-    blocking {
-      ZIO.bracket {
-        ZIO(new FileWriter(outputFile))
-      }(fileWriter => URIO(fileWriter.close())) { fileWriter =>
-        ZIO(template.process(input, fileWriter))
+  private def renderTemplate(outputFile: File, template: Template, input: java.util.Map[String, _]): Task[Unit] = {
+    ZIO.blocking {
+      ZIO.acquireReleaseWith {
+        ZIO.succeed(new FileWriter(outputFile))
+      }(fileWriter => ZIO.succeed(fileWriter.close())) { fileWriter =>
+        ZIO.succeed(template.process(input, fileWriter))
       }
     }
   }
 
-  private def buildInputProps(siteCommonData: Map[String, Object], postData: Seq[Map[String, String]],
-      translationBundle: TranslationBundle): JavaMap[String, Object] = {
+  private def buildInputProps(
+      siteCommonData: Map[String, Object],
+      postData: Seq[Map[String, String]],
+      translationBundle: TranslationBundle
+  ): JavaMap[String, Object] = {
     val (publishedPosts, miscArticles) = postData
       .filter { post =>
         val postStatus = post.get("status")

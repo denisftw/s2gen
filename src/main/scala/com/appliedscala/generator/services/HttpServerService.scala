@@ -4,14 +4,12 @@ import com.appliedscala.generator.errors.{HttpServerStartError, HttpServerStopEr
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.handler.{DefaultHandler, HandlerList, ResourceHandler}
 import org.slf4j.LoggerFactory
-import zio.Task
-import zio.blocking._
-import zio.ZIO
+import zio._
 
 case class HttpServerService() {
   private val logger = LoggerFactory.getLogger(this.getClass)
 
-  private def createServer(path: String, port: Int): Task[Server] = Task {
+  private def createServer(path: String, port: Int): Task[Server] = ZIO.succeed {
     logger.info(s"Starting the HTTP server")
     val jettyServer = new Server(port)
     val resourceHandler = new ResourceHandler()
@@ -24,28 +22,30 @@ case class HttpServerService() {
     jettyServer
   }
 
-  def start(path: String, port: Int): ZIO[Blocking, HttpServerStartError, Server] = {
-    blocking {
-      createServer(path, port).map { server =>
-        server.start()
-        logger.info(s"The HTTP server has been started on port $port")
-        server
-      }
-    }.catchAll { th =>
-      ZIO.fail(HttpServerStartError(th))
+  def start(path: String, port: Int): IO[HttpServerStartError, Server] = {
+    ZIO.blocking {
+      createServer(path, port)
+        .map { server =>
+          server.start()
+          logger.info(s"The HTTP server has been started on port $port")
+          server
+        }
+        .catchAll { th =>
+          ZIO.fail(HttpServerStartError(th))
+        }
     }
   }
 
-  def stop(maybeServer: Option[Server]): ZIO[Blocking, HttpServerStopError, Unit] = {
-    blocking {
-      Task {
+  def stop(maybeServer: Option[Server]): IO[HttpServerStopError, Unit] = {
+    ZIO
+      .attemptBlocking {
         maybeServer.foreach { server =>
           server.stop()
           logger.info("The HTTP server has been stopped")
         }
       }
-    }.catchAll { th =>
-      ZIO.fail(HttpServerStopError(th))
-    }
+      .catchAll { th =>
+        ZIO.fail(HttpServerStopError(th))
+      }
   }
 }

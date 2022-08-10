@@ -2,7 +2,7 @@ package com.appliedscala.generator.services
 
 import com.appliedscala.generator.errors.InitError
 import org.slf4j.LoggerFactory
-import zio.IO
+import zio._
 
 import java.io.{File, PrintWriter}
 import java.nio.file.{Files, Paths}
@@ -11,7 +11,7 @@ import scala.io.Source
 class InitService {
   private val logger = LoggerFactory.getLogger(this.getClass)
 
-  def initProjectStructure(): IO[InitError, Unit] = IO.effectSuspendTotal {
+  def initProjectStructure(): IO[InitError, Unit] = ZIO.suspendSucceed {
     try {
       println("Initializing...")
       val classLoader = this.getClass.getClassLoader
@@ -37,9 +37,9 @@ class InitService {
         copyFromClasspath(classLoader, s"init/templates/$templateName", "templates", templateName)
       }
       println(s"The skeleton project has been generated. Now you can type s2gen to generate HTML files")
-      IO.succeed(())
+      ZIO.succeed(())
     } catch {
-      case exc: Exception => IO.fail(InitError(exc))
+      case exc: Exception => ZIO.fail(InitError(exc))
     }
   }
 
