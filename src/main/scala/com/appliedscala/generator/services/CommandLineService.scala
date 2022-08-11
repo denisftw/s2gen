@@ -5,7 +5,7 @@ import com.appliedscala.generator.model.{CommandLineOption, CustomHtmlTemplateDe
 import org.apache.commons.cli.{DefaultParser, HelpFormatter, Options}
 import zio._
 
-import scala.util.Try
+import scala.util.{Success, Try}
 
 class CommandLineService(initService: InitService) {
 
@@ -21,7 +21,10 @@ class CommandLineService(initService: InitService) {
 
       if (CommandLineOption.Version.matches(cmd)) {
         val versionNumberT = Try { CustomHtmlTemplateDescription.getClass.getPackage.getImplementationVersion }
-        val versionNumber = versionNumberT.getOrElse("[dev]")
+        val versionNumber = versionNumberT match {
+          case Success(version) if version != null => version
+          case _                                   => "[dev]"
+        }
         println(s"""s2gen version $versionNumber""")
         ZIO.succeed(Left(()))
       } else if (CommandLineOption.Init.matches(cmd)) {
